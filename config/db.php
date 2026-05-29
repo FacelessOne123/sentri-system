@@ -1,19 +1,17 @@
 <?php
-// db_connect.php – SenTri database connection
-// Change credentials to match your MySQL setup
-
 $servername = "localhost";
-$db_user    = "root";       // change if needed
-$db_pass    = "";           // change if you set one
+$db_user    = "root";
+$db_pass    = "";
 $dbname     = "sentri";
 
-$conn = new mysqli($servername, $db_user, $db_pass, $dbname);
-
+// Try Unix socket first, fallback to TCP
+$conn = @new mysqli(null, $db_user, $db_pass, $dbname, 3306, '/var/run/mysqld/mysqld.sock');
 if ($conn->connect_error) {
-    // Never expose raw MySQL errors in production
-    error_log("SenTri DB Error: " . $conn->connect_error);
-    die(json_encode(['status' => 'error', 'message' => 'Database connection failed.']));
+    $conn = new mysqli($servername, $db_user, $db_pass, $dbname);
 }
-
+if ($conn->connect_error) {
+    error_log("SenTri DB Error: " . $conn->connect_error);
+    die(json_encode(['status'=>'error','message'=>'Database connection failed.']));
+}
 $conn->set_charset("utf8mb4");
 ?>
