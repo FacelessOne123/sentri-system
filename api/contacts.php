@@ -3,6 +3,9 @@
 // Admin: full CRUD on emergency_contacts
 // System: auto-notify matching contacts on new Dangerous reports
 
+ini_set('display_errors', 0);
+error_reporting(E_ALL);
+ob_start();
 session_start();
 header('Content-Type: application/json');
 
