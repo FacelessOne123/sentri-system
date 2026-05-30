@@ -120,7 +120,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     );
     if (!$ins) { echo json_encode(['status'=>'error','message'=>'Prepare error: '.$conn->error]); exit; }
-    if (!$ins->bind_param("ssssssssssssiiss", $first,$last,$email,$hash,$role_req,$phone,$org_name,$position,$brgy,$muni,$rtype,$is_approved,$email_verified,$ins_token,$ins_expires)) {
+    if (!$ins->bind_param("sssssssssssiiss", $first,$last,$email,$hash,$role_req,$phone,$org_name,$position,$brgy,$muni,$rtype,$is_approved,$email_verified,$ins_token,$ins_expires)) {
         echo json_encode(['status'=>'error','message'=>'Bind error: '.$ins->error]); exit;
     }
     if (!$ins->execute()) {
