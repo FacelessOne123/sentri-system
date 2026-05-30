@@ -8,6 +8,45 @@ if (isset($_SESSION['user_id'])) {
 }
 require __DIR__ . '/config/db.php';
 
+function getFailedAttemptsCount($conn, $email, $minutes = 30) {
+    $cutoff = date('Y-m-d H:i:s', strtotime("-{$minutes} minutes"));
+    $stmt = $conn->prepare("SELECT COUNT(*) FROM login_logs WHERE email = ? AND status = 'Failed' AND created_at >= ?");
+    $stmt->bind_param("ss", $email, $cutoff);
+    $stmt->execute();
+    $stmt->bind_result($count);
+    $stmt->fetch();
+    $stmt->close();
+    return (int)$count;
+}
+
+function isLockedOut($conn, $email) {
+    $stmt = $conn->prepare("SELECT COUNT(*) FROM login_logs WHERE email = ? AND status = 'Locked' AND created_at >= NOW() - INTERVAL 30 SECOND");
+    $stmt->bind_param("s", $email);
+    $stmt->execute();
+    $stmt->bind_result($count);
+    $stmt->fetch();
+    $stmt->close();
+    return $count > 0;
+}
+
+function flagHighRiskAttempt($conn, $email) {
+    $failed_count = getFailedAttemptsCount($conn, $email, 30);
+    if ($failed_count >= 5) {
+        $user_id = 0;
+        $stmt = $conn->prepare("SELECT id FROM users WHERE email = ? LIMIT 1");
+        $stmt->bind_param("s", $email);
+        $stmt->execute();
+        $stmt->bind_result($user_id);
+        $stmt->fetch();
+        $stmt->close();
+
+        $stmt = $conn->prepare("INSERT INTO flagged_accounts (user_id, risk_level, failed_count, last_attempt, notes, reviewed) VALUES (?, 'high', ?, NOW(), 'Multiple failed login attempts detected', 0) ON DUPLICATE KEY UPDATE risk_level = 'high', failed_count = ?, last_attempt = NOW(), reviewed = 0");
+        $stmt->bind_param("iii", $user_id, $failed_count, $failed_count);
+        $stmt->execute();
+        $stmt->close();
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     $email    = trim($_POST['email']    ?? '');
@@ -16,7 +55,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $ip       = $_SERVER['HTTP_CLIENT_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
     $device   = $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown';
 
-    // Auto-migrate columns
     $db = $conn->query("SELECT DATABASE()")->fetch_row()[0];
     $cols = [];
     $cr = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users'");
@@ -38,7 +76,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     foreach ($migrations as $q) $conn->query($q);
     if (!in_array('email_verified',$cols)) $conn->query("UPDATE users SET email_verified=1 WHERE created_at < NOW()");
     if (!in_array('is_approved',$cols)) { $conn->query("UPDATE users SET is_approved=1 WHERE role='community' OR role='user' OR role='admin'"); }
-    // Only expand enum when needed
     $enumRes = $conn->query("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users' AND COLUMN_NAME='role'");
     if ($enumRes) { $enumRow=$enumRes->fetch_row(); if($enumRow && strpos($enumRow[0],'first_responder')===false) $conn->query("ALTER TABLE users MODIFY COLUMN role ENUM('user','community','barangay','lgu','first_responder','admin') NOT NULL DEFAULT 'community'"); }
 
@@ -63,16 +100,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         echo json_encode(['status'=>'success','redirect'=>'/admin.php']); exit;
     }
 
+    if (isLockedOut($conn, $email)) {
+        echo json_encode(['status'=>'error','message'=>'Too many failed attempts. Please wait 30 seconds before trying again.']);
+        exit;
+    }
+
     $stmt = $conn->prepare("SELECT id,first_name,last_name,password,role,email_verified,is_approved FROM users WHERE email=? LIMIT 1");
     $stmt->bind_param("s",$email); $stmt->execute(); $stmt->store_result();
     $log_status='Failed'; $log_uid=null; $resp=['status'=>'error','message'=>'Invalid credentials.'];
+    $is_successful_login = false;
 
     if ($stmt->num_rows > 0) {
         $stmt->bind_result($id,$fn,$ln,$hash,$role,$verified,$approved);
         $stmt->fetch();
         if (password_verify($password,$hash)) {
-            // Email verification only required for community accounts.
-            // Official roles (barangay, lgu, first_responder) use admin approval instead.
             $community_roles = ['community', 'user'];
             if (!$verified && in_array($role, $community_roles, true)) {
                 $stmt->close();
@@ -96,11 +137,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             session_regenerate_id(true);
             $_SESSION = ['user_id'=>$id,'first_name'=>htmlspecialchars($fn,ENT_QUOTES,'UTF-8'),'last_name'=>htmlspecialchars($ln,ENT_QUOTES,'UTF-8'),'role'=>$role,'is_approved'=>(bool)$approved];
             $log_status='Success'; $log_uid=$id;
+            $is_successful_login = true;
             require_once __DIR__.'/config/auth.php';
             $resp=['status'=>'success','redirect'=>portal_url($role),'message'=>'Welcome, '.htmlspecialchars($fn).'!'];
         }
     }
     $stmt->close();
+
+    if (!$is_successful_login) {
+        flagHighRiskAttempt($conn, $email);
+    }
+
     $lg=$conn->prepare("INSERT INTO login_logs(user_id,email,ip_address,device,status)VALUES(?,?,?,?,?)");
     $lg->bind_param("issss",$log_uid,$email,$ip,$device,$log_status); $lg->execute(); $lg->close();
     echo json_encode($resp); exit;
@@ -126,7 +173,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .gov-links{display:flex;gap:20px;}
 .gov-links a{font-size:0.82rem;color:var(--navy);text-decoration:none;font-weight:600;opacity:0.8;}
 .gov-links a:hover{opacity:1;color:var(--gold-dark);}
-.hero{background:linear-gradient(135deg,var(--navy-dark) 0%,var(--navy) 60%,#1a5276 100%);padding:36px 32px 0;position:relative;overflow:hidden;}
+.hero{background:linear-gradient(135deg,var(--navy-dark) 0%,var(--navy) 60%,#1a5276 100%);padding:36px 32px 0;position:relative;overflow:visible;}
 .hero::before{content:'';position:absolute;inset:0;background:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");}
 .hero-inner{max-width:980px;margin:0 auto;display:flex;align-items:center;gap:40px;position:relative;z-index:1;}
 .hero-eyebrow{font-size:0.73rem;font-weight:700;color:var(--gold);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;}
@@ -151,7 +198,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .portal-name{font-size:0.76rem;font-weight:700;color:#1a1a2e;line-height:1.3;}
 .portal-sub{font-size:0.66rem;color:#6b7280;margin-top:2px;}
 .form-wrap{max-width:980px;margin:0 auto;padding:0 32px 48px;}
-.form-card{background:#fff;border-radius:20px;padding:38px 42px;margin-top:48px;box-shadow:0 8px 40px rgba(0,0,0,0.2);}
+.form-card{background:#fff;border-radius:20px;padding:56px 42px 38px;margin-top:48px;box-shadow:0 8px 40px rgba(0,0,0,0.2);}
 .portal-header{display:flex;align-items:center;gap:14px;margin-bottom:26px;padding-bottom:18px;border-bottom:2px solid #e5e7eb;}
 .ph-icon{width:50px;height:50px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:1.3rem;flex-shrink:0;}
 .ph-title{font-size:1.1rem;font-weight:800;color:#1a1a2e;}
@@ -168,7 +215,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 .forgot-row a{font-size:0.79rem;color:#2563eb;text-decoration:none;font-weight:600;}
 .btn-login{width:100%;padding:12px;border:none;border-radius:11px;font-size:0.94rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;transition:all 0.2s;color:#fff;display:flex;align-items:center;justify-content:center;gap:8px;}
 .btn-login:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,0,0,0.25);}
-.btn-login:disabled{opacity:0.6;cursor:not-allowed;}
+.btn-login:disabled{opacity:0.6;cursor:not-allowed;background:#9ca3af;}
 .msg{padding:10px 14px;border-radius:9px;font-size:0.83rem;font-weight:500;margin-bottom:14px;display:none;text-align:center;}
 .msg.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
 .msg.success{background:#f0fdf4;color:#14532d;border:1px solid #bbf7d0;}
@@ -189,6 +236,7 @@ body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:co
 </style>
 </head>
 <body>
+<!-- Your HTML remains the same -->
 <header class="gov-bar">
   <a href="index.php" class="gov-brand">
     <div class="gov-seal"><i class="fas fa-shield-halved"></i></div>
@@ -264,6 +312,8 @@ const portals={
   admin:          {title:'System Administrator Sign In', sub:'Default credentials: username <b>admin</b> / password <b>admin</b>',         icon:'fa-gear',          bg:'#f5f3ff',  color:'#5b21b6',  btn:'linear-gradient(135deg,#7c3aed,#5b21b6)',   label:'Access Admin Panel',            official:true},
 };
 let current='community';
+let timerInterval = null;
+
 function selectPortal(key,el){
   current=key;
   document.querySelectorAll('.portal-card').forEach(c=>c.classList.remove('selected'));
@@ -281,12 +331,38 @@ function selectPortal(key,el){
   const on=document.getElementById('officialNotice');
   on.style.display=p.official?'flex':'none';
   document.getElementById('signupRow').style.display=(key==='community')?'block':'none';
-  if(key==='admin'){ document.getElementById('emailField').value='admin'; document.getElementById('pwField').value='admin'; }
-  else { document.getElementById('emailField').value=''; document.getElementById('pwField').value=''; }
+  if(key==='admin'){ 
+    document.getElementById('emailField').value='admin'; 
+    document.getElementById('pwField').value='admin'; 
+  } else { 
+    document.getElementById('emailField').value=''; 
+    document.getElementById('pwField').value=''; 
+  }
   document.getElementById('loginMsg').style.display='none';
   document.getElementById('resendBox').style.display='none';
 }
+
 function togglePw(){const f=document.getElementById('pwField');const b=f.nextElementSibling;const s=f.type==='password';f.type=s?'text':'password';b.textContent=s?'HIDE':'SHOW';}
+
+function startLockTimer(seconds) {
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true;
+  let timeLeft = seconds;
+
+  if(timerInterval) clearInterval(timerInterval);
+
+  timerInterval = setInterval(() => {
+    timeLeft--;
+    btn.innerHTML = `<i class="fas fa-lock"></i> Wait ${timeLeft}s`;
+    if (timeLeft <= 0) {
+      clearInterval(timerInterval);
+      btn.disabled = false;
+      const p = portals[current];
+      btn.innerHTML = `<i class="fas fa-right-to-bracket"></i> ${p.label}`;
+    }
+  }, 1000);
+}
+
 document.getElementById('loginForm').addEventListener('submit',async e=>{
   e.preventDefault();
   const btn=document.getElementById('loginBtn');const msg=document.getElementById('loginMsg');const orig=btn.innerHTML;
@@ -296,11 +372,19 @@ document.getElementById('loginForm').addEventListener('submit',async e=>{
     const data=await res.json();
     if(data.status==='success'){showMsg('success',data.message||'Redirecting...');setTimeout(()=>window.location.href=data.redirect,700);}
     else{
-      showMsg('error',data.message||'Sign in failed.');btn.disabled=false;btn.innerHTML=orig;
+      showMsg('error',data.message||'Sign in failed.');
+      if(data.message && data.message.includes('30 seconds')) {
+        startLockTimer(30);
+      } else {
+        btn.disabled=false;
+        const p = portals[current];
+        btn.innerHTML = `<i class="fas fa-right-to-bracket"></i> ${p.label}`;
+      }
       if(data.unverified){document.getElementById('resendBox').style.display='block';document.getElementById('resendEmail').value=document.getElementById('emailField').value;}
     }
   }catch{showMsg('error','Connection error. Please try again.');btn.disabled=false;btn.innerHTML=orig;}
 });
+
 async function resend(){
   const email=document.getElementById('resendEmail').value.trim();const btn=document.getElementById('resendBtn');
   if(!email)return;btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Sending...';
@@ -312,4 +396,3 @@ function showMsg(type,text){const el=document.getElementById('loginMsg');el.clas
 </script>
 </body>
 </html>
-
