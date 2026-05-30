@@ -248,6 +248,9 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
       <button class="menu-item" id="navLogs" onclick="showTab('logs')">
         <i class="fas fa-scroll"></i> Login Logs
       </button>
+      <button class="menu-item" id="navSecurity" onclick="showTab('security')">
+        <i class="fas fa-shield-exclamation"></i> Security Monitor
+      </button>
       <button class="menu-item" id="navContacts" onclick="showTab('contacts')">
         <i class="fas fa-address-book"></i> Emergency Contacts
       </button>
@@ -421,6 +424,72 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
       </div>
     </div>
 
+    <!-- ── SECURITY MONITOR TAB ── -->
+<div class="tab-panel" id="tab-security">
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <i class="fas fa-shield-exclamation"></i> Security Monitor
+      </div>
+      <span style="font-size:0.8rem;color:var(--muted);">Failed Login Attempts & Flagged Accounts</span>
+    </div>
+
+    <!-- Risk Summary -->
+    <div class="stats-row" style="margin-bottom:20px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+      <div class="stat-card red">
+        <div class="stat-icon red"><i class="fas fa-exclamation-triangle"></i></div>
+        <div>
+          <div class="stat-num" id="highRiskCount">0</div>
+          <div class="stat-label">High Risk Accounts</div>
+        </div>
+      </div>
+      <div class="stat-card orange">
+        <div class="stat-icon" style="background:#fff7ed;color:#dd6b20;"><i class="fas fa-exclamation-circle"></i></div>
+        <div>
+          <div class="stat-num" id="mediumRiskCount">0</div>
+          <div class="stat-label">Medium Risk</div>
+        </div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-icon green"><i class="fas fa-check-circle"></i></div>
+        <div>
+          <div class="stat-num" id="totalFlagged">0</div>
+          <div class="stat-label">Total Flagged</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <input type="text" id="securitySearch" placeholder="Search email or IP..." style="flex:1;">
+      <select id="riskFilter">
+        <option value="">All Risk Levels</option>
+        <option value="high">High Risk Only</option>
+        <option value="medium">Medium Risk</option>
+        <option value="normal">Normal</option>
+      </select>
+    </div>
+
+    <div class="table-wrap">
+      <div class="loading" id="securityLoading"><i class="fas fa-spinner"></i> Loading security data...</div>
+      <table id="securityTable" style="display:none;">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Email</th>
+            <th>IP Address</th>
+            <th>Failed Attempts (30min)</th>
+            <th>Risk Level</th>
+            <th>Last Attempt</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="securityBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
     <div class="tab-panel" id="tab-contacts">
       <div class="panel">
         <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
@@ -587,6 +656,7 @@ const tabTitles = {
   posts:'<i class="fas fa-clipboard-list" style="color:var(--blue);margin-right:8px;"></i>Manage Posts',
   audit:'<i class="fas fa-shield-halved" style="color:var(--blue);margin-right:8px;"></i>Reports Audit',
   logs:'<i class="fas fa-scroll" style="color:var(--blue);margin-right:8px;"></i>Login Logs',
+  security:'<i class="fas fa-shield-exclamation" style="color:var(--red);margin-right:8px;"></i>Security Monitor',
   contacts:'<i class="fas fa-address-book" style="color:var(--blue);margin-right:8px;"></i>Emergency Contacts',
 };
 let pendingLoaded = false;
@@ -597,6 +667,7 @@ function showTab(name){
   document.getElementById('tab-'+name).classList.add('active');
   document.getElementById('nav'+name.charAt(0).toUpperCase()+name.slice(1))?.classList.add('active');
   document.getElementById('pageTitle').innerHTML=tabTitles[name];
+  
   // Lazy load
   if(name==='users'    && allUsers.length===0)    loadUsers();
   if(name==='posts'    && allReports.length===0)  loadReports();
@@ -604,6 +675,10 @@ function showTab(name){
   if(name==='audit')                               loadAuditLogs();
   if(name==='logs'     && allLogs.length===0)     loadLogs();
   if(name==='contacts' && allContacts.length===0) loadContacts();
+  
+  // ←←← ADD THIS LINE FOR SECURITY MONITOR
+  if(name==='security') loadSecurityMonitor();
+
   if(window.innerWidth<=900) closeSidebar();
 }
 
@@ -1066,6 +1141,77 @@ document.addEventListener('DOMContentLoaded',()=>{
   const as=document.getElementById('auditSearch'); if(as) as.addEventListener('input',renderAudit);
   const aa=document.getElementById('auditAction'); if(aa) aa.addEventListener('change',renderAudit);
 });
+
+// ── SECURITY MONITOR ─────────────────────────────────────────
+let allSecurityData = [];
+
+async function loadSecurityMonitor() {
+  document.getElementById('securityLoading').style.display = 'block';
+  document.getElementById('securityTable').style.display = 'none';
+
+  try {
+    const res = await fetch('api/security.php?action=get_flagged');
+    const data = await res.json();
+
+    if (data.status === 'success') {
+      allSecurityData = data.data;
+
+      const high = allSecurityData.filter(r => r.risk_level === 'high').length;
+      const medium = allSecurityData.filter(r => r.risk_level === 'medium').length;
+
+      document.getElementById('highRiskCount').textContent = high;
+      document.getElementById('mediumRiskCount').textContent = medium;
+      document.getElementById('totalFlagged').textContent = allSecurityData.length;
+
+      renderSecurityTable();
+    }
+  } catch (e) {
+    console.error(e);
+  }
+
+  document.getElementById('securityLoading').style.display = 'none';
+  document.getElementById('securityTable').style.display = 'table';
+}
+
+function renderSecurityTable() {
+  const search = (document.getElementById('securitySearch').value || '').toLowerCase();
+  const riskFilter = document.getElementById('riskFilter').value;
+
+  let filtered = allSecurityData.filter(row => {
+    if (riskFilter && row.risk_level !== riskFilter) return false;
+    if (search) {
+      const hay = (row.email + ' ' + row.ip_address).toLowerCase();
+      return hay.includes(search);
+    }
+    return true;
+  });
+
+  const body = document.getElementById('securityBody');
+  if (filtered.length === 0) {
+    body.innerHTML = `<tr><td colspan="8" class="empty"><i class="fas fa-shield-halved"></i><p>No flagged attempts found.</p></td></tr>`;
+    return;
+  }
+
+  body.innerHTML = filtered.map((row, i) => {
+    const riskClass = row.risk_level === 'high' ? 'badge dangerous' : 
+                     (row.risk_level === 'medium' ? 'badge caution' : 'badge safe');
+
+    return `
+      <tr>
+        <td>${i+1}</td>
+        <td><strong>${esc(row.email || 'Unknown')}</strong></td>
+        <td style="font-family:monospace;">${esc(row.ip_address)}</td>
+        <td><strong>${row.failed_count || row.recent_failed || 0}</strong></td>
+        <td><span class="${riskClass}">${(row.risk_level || 'normal').toUpperCase()}</span></td>
+        <td style="color:#888;font-size:0.78rem;">${row.last_attempt}</td>
+        <td><span class="badge ${row.reviewed ? 'archived' : 'dangerous'}">${row.reviewed ? 'Reviewed' : 'Flagged'}</span></td>
+        <td>
+          ${!row.reviewed ? `<button class="act-btn" style="background:#16a34a;color:#fff;" onclick="markReviewed(${row.flag_id})"><i class="fas fa-check"></i> Reviewed</button>` : ''}
+          <button class="act-btn del" onclick="deleteFlag(${row.flag_id})"><i class="fas fa-trash"></i></button>
+        </td>
+      </tr>`;
+  }).join('');
+}
 
 </script>
 </body>
