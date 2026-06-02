@@ -6,18 +6,15 @@ session_start();
 if (isset($_SESSION['user_id'])) { header("Location: dashboard.php"); exit; }
 require __DIR__ . '/config/db.php';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    ob_clean();
-    header('Content-Type: application/json');
-    try {
-
-    // ── Auto-migrate: add email verification columns if they don't exist yet ──
-    // This means email_verification.sql doesn't need to be run manually.
+// ── Auto-migrate: runs on every request (before POST check) ──────────────────
+// Ensures schema is up-to-date before any INSERT attempt.
+try {
     $db = $conn->query("SELECT DATABASE()")->fetch_row()[0];
     $existingCols = [];
     $colRes = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
                             WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users'");
     while ($r = $colRes->fetch_row()) $existingCols[] = $r[0];
+    $colRes->free();
 
     if (!in_array('email_verified', $existingCols))
         $conn->query("ALTER TABLE users ADD COLUMN email_verified TINYINT(1) NOT NULL DEFAULT 0 AFTER role");
@@ -30,11 +27,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!in_array('reset_token_expires', $existingCols))
         $conn->query("ALTER TABLE users ADD COLUMN reset_token_expires DATETIME DEFAULT NULL AFTER reset_token");
 
-    // Mark any existing users (registered before this migration) as already verified
     if (!in_array('email_verified', $existingCols))
         $conn->query("UPDATE users SET email_verified=1 WHERE created_at < NOW()");
 
-    // Migration 006: role expansion and affiliation columns
     if (!in_array('phone_number', $existingCols))
         $conn->query("ALTER TABLE users ADD COLUMN phone_number VARCHAR(30) DEFAULT NULL AFTER email");
     if (!in_array('org_name', $existingCols))
@@ -51,18 +46,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if (!in_array('responder_type', $existingCols))
         $conn->query("ALTER TABLE users ADD COLUMN responder_type VARCHAR(30) DEFAULT NULL");
-    // Only expand enum if new roles aren't already present
-    $enumRes = $conn->query("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users' AND COLUMN_NAME='role'");
+
+    $enumRes = $conn->query("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+                             WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users' AND COLUMN_NAME='role'");
     if ($enumRes) {
         $enumRow = $enumRes->fetch_row();
+        $enumRes->free();
         if ($enumRow && strpos($enumRow[0], 'first_responder') === false) {
             $conn->query("ALTER TABLE users MODIFY COLUMN role ENUM('user','community','barangay','lgu','first_responder','admin') NOT NULL DEFAULT 'community'");
         }
     }
-    // Clear any pending results/errors left by DDL statements
+
+    // Flush any remaining multi-results from DDL
     while ($conn->more_results()) $conn->next_result();
-    $conn->query("SELECT 1"); // flush connection state
-    // ─────────────────────────────────────────────────────────────────────────
+} catch (Throwable $migErr) {
+    error_log('SenTri migration error: ' . $migErr->getMessage());
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    ob_clean();
+    header('Content-Type: application/json');
+    try {
 
     $first    = trim($_POST['first_name']    ?? '');
     $last     = trim($_POST['last_name']     ?? '');
@@ -79,7 +84,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $allowed_roles = ['community','barangay','lgu','first_responder'];
     if (!in_array($role_req, $allowed_roles, true)) $role_req = 'community';
-    // Community auto-approved; officials need admin approval
     $is_approved = ($role_req === 'community') ? 1 : 0;
 
     if (empty($first)||empty($last)||empty($email)||empty($pw)) {
@@ -99,6 +103,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$chk) { echo json_encode(['status'=>'error','message'=>'Database error. Please try again.']); exit; }
     $chk->bind_param("s", $email); $chk->execute(); $chk->store_result();
     if ($chk->num_rows > 0) {
+        $chk->close();
         echo json_encode(['status'=>'error','message'=>'Email is already registered.']); exit;
     }
     $chk->close();
@@ -107,22 +112,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $expires_at = date('Y-m-d H:i:s', strtotime('+24 hours'));
     $hash       = password_hash($pw, PASSWORD_BCRYPT, ['cost' => 12]);
 
-    // Official roles (barangay, lgu, first_responder) skip email verification —
-    // admin approval is their gate. Community accounts still require email verify.
     $official_roles = ['barangay', 'lgu', 'first_responder'];
     $is_official    = in_array($role_req, $official_roles, true);
     $email_verified = $is_official ? 1 : 0;
     $ins_token      = $is_official ? null : $token;
     $ins_expires    = $is_official ? null : $expires_at;
 
+    // Explicitly cast nullable string params to avoid driver-level bind issues
+    $bind_phone    = $phone    ?: null;
+    $bind_org      = $org_name ?: null;
+    $bind_position = $position ?: null;
+    $bind_brgy     = $brgy     ?: null;
+    $bind_muni     = $muni     ?: null;
+
     $ins = $conn->prepare(
-        "INSERT INTO users (first_name,last_name,email,password,role,phone_number,org_name,`position`,barangay_name,municipality,responder_type,is_approved,email_verified,verification_token,token_expires_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        "INSERT INTO users
+         (first_name, last_name, email, password, role,
+          phone_number, org_name, `position`, barangay_name, municipality,
+          responder_type, is_approved, email_verified, verification_token, token_expires_at)
+         VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?)"
     );
-    if (!$ins) { echo json_encode(['status'=>'error','message'=>'Prepare error: '.$conn->error]); exit; }
-    if (!$ins->bind_param("sssssssssssiiss", $first,$last,$email,$hash,$role_req,$phone,$org_name,$position,$brgy,$muni,$rtype,$is_approved,$email_verified,$ins_token,$ins_expires)) {
-        echo json_encode(['status'=>'error','message'=>'Bind error: '.$ins->error]); exit;
+    if (!$ins) {
+        echo json_encode(['status'=>'error','message'=>'Prepare error: '.$conn->error]); exit;
     }
+    $ins->bind_param(
+        "sssssssssssiiss",
+        $first, $last, $email, $hash, $role_req,
+        $bind_phone, $bind_org, $bind_position, $bind_brgy, $bind_muni,
+        $rtype, $is_approved, $email_verified, $ins_token, $ins_expires
+    );
     if (!$ins->execute()) {
         echo json_encode(['status'=>'error','message'=>'Registration failed: '.$ins->error]); exit;
     }
@@ -179,7 +197,6 @@ body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
 .page-header{text-align:center;margin-bottom:28px;}
 .page-header h2{font-size:1.55rem;font-weight:800;color:var(--navy);margin-bottom:6px;}
 .page-header p{font-size:0.88rem;color:var(--muted);}
-/* Role selector */
 .role-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px;}
 .role-card{background:#fff;border:2px solid var(--border);border-radius:13px;padding:14px 10px;text-align:center;cursor:pointer;transition:all 0.2s;box-shadow:0 2px 8px rgba(0,0,0,0.05);}
 .role-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,0.1);}
@@ -195,7 +212,6 @@ body{background:var(--bg);min-height:100vh;display:flex;flex-direction:column;}
 .r-responder .role-icon{background:#fef2f2;color:#b91c1c;}
 .role-name{font-size:0.76rem;font-weight:700;color:var(--text);}
 .role-sub{font-size:0.64rem;color:var(--muted);margin-top:2px;}
-/* Card */
 .form-card{background:#fff;border-radius:18px;padding:32px 36px;box-shadow:0 4px 24px rgba(0,0,0,0.1);border:1px solid var(--border);}
 .card-section{border-top:1px solid var(--border);margin-top:20px;padding-top:18px;}
 .section-title{font-size:0.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:14px;}
