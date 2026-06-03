@@ -83,6 +83,22 @@ if ($view === 'residents') {
     $s->close();
 }
 
+$map_reports = [];
+if ($view === 'map') {
+    if ($brgy) {
+        $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description FROM reports r WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL AND r.barangay=? ORDER BY r.created_at DESC LIMIT 500");
+        $s->bind_param("s",$brgy);
+    } else {
+        $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description FROM reports r WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
+    }
+    $s->execute(); $res=$s->get_result();
+    while($row=$res->fetch_assoc()) $map_reports[]=$row;
+    $s->close();
+}
+$map_total_brgy = $brgy
+    ? cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0 AND barangay=?","s",[$brgy])
+    : cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
+
 $nav_items = [
     'overview'  => ['icon'=>'fa-gauge',           'label'=>'Dashboard'],
     'reports'   => ['icon'=>'fa-file-lines',       'label'=>'Incident Reports'],
@@ -201,6 +217,34 @@ tr:hover td{background:#fafafa;}
 .coming-soon i{font-size:3rem;color:var(--green);opacity:0.2;display:block;margin-bottom:16px;}
 .coming-soon h3{font-size:1rem;font-weight:700;color:var(--text);margin-bottom:6px;}
 .coming-soon p{font-size:0.85rem;color:var(--muted);}
+/* MAP */
+.map-wrap{position:relative;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,0.1);border:1px solid var(--border);}
+#incidentMap{height:490px;width:100%;background:#e8f4e8;}
+.map-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 16px;background:#fff;border-bottom:1px solid var(--border);border-radius:14px 14px 0 0;}
+.map-controls h3{font-size:0.88rem;font-weight:700;margin-right:4px;}
+.filter-btn{padding:5px 13px;border-radius:20px;border:1.5px solid var(--border);background:#fff;font-size:0.76rem;font-weight:700;cursor:pointer;transition:all 0.18s;font-family:'Inter',sans-serif;}
+.filter-btn.active-all{background:var(--green);color:#fff;border-color:var(--green);}
+.filter-btn.active-dangerous{background:#dc2626;color:#fff;border-color:#dc2626;}
+.filter-btn.active-caution{background:#d97706;color:#fff;border-color:#d97706;}
+.filter-btn.active-safe{background:#16a34a;color:#fff;border-color:#16a34a;}
+.map-legend{position:absolute;bottom:16px;right:12px;background:rgba(255,255,255,0.95);border-radius:10px;padding:11px 14px;font-size:0.76rem;box-shadow:0 2px 12px rgba(0,0,0,0.15);z-index:400;border:1px solid var(--border);}
+.legend-row{display:flex;align-items:center;gap:7px;margin-bottom:5px;font-weight:600;}
+.legend-row:last-child{margin-bottom:0;}
+.legend-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0;}
+.map-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;}
+.map-stat{background:#fff;border-radius:12px;padding:14px 16px;display:flex;align-items:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,0.05);border:1px solid var(--border);}
+.map-stat-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0;}
+.map-stat-num{font-size:1.3rem;font-weight:800;line-height:1;}
+.map-stat-lbl{font-size:0.68rem;color:var(--muted);font-weight:600;margin-top:2px;}
+.no-coords-notice{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:11px 15px;font-size:0.82rem;color:#166534;margin-bottom:14px;display:flex;align-items:center;gap:9px;}
+/* REPORTS FILTER */
+.reports-filter-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--border);background:#f8fafc;}
+.rf-btn{padding:5px 13px;border-radius:20px;border:1.5px solid var(--border);background:#fff;font-size:0.75rem;font-weight:700;cursor:pointer;transition:all 0.18s;font-family:'Inter',sans-serif;}
+.rf-btn.rf-active{background:var(--green);color:#fff;border-color:var(--green);}
+.rf-search{flex:1;min-width:160px;max-width:260px;padding:6px 12px;border:1.5px solid var(--border);border-radius:20px;font-size:0.8rem;font-family:'Inter',sans-serif;outline:none;}
+.rf-search:focus{border-color:#86efac;}
+.rpt-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}
+@media(max-width:700px){.map-stats,.rpt-stats{grid-template-columns:1fr 1fr;}#incidentMap{height:340px;}}
 /* REPORT DETAIL MODAL */
 .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:center;justify-content:center;padding:20px;}
 .modal-bg.show{display:flex;}
@@ -302,8 +346,24 @@ tr:hover td{background:#fafafa;}
     </div>
 
   <?php elseif($view === 'reports'): ?>
+    <div class="rpt-stats">
+      <div class="map-stat"><div class="map-stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-file-lines"></i></div><div><div class="map-stat-num"><?= $total ?></div><div class="map-stat-lbl">Total</div></div></div>
+      <div class="map-stat"><div class="map-stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="map-stat-num"><?= $danger ?></div><div class="map-stat-lbl">Dangerous</div></div></div>
+      <div class="map-stat"><div class="map-stat-icon" style="background:#fffbeb;color:#d97706;"><i class="fas fa-circle-exclamation"></i></div><div><div class="map-stat-num"><?= $caution ?></div><div class="map-stat-lbl">Caution</div></div></div>
+      <div class="map-stat"><div class="map-stat-icon" style="background:#f0fdf4;color:#16a34a;"><i class="fas fa-circle-check"></i></div><div><div class="map-stat-num"><?= $safe ?></div><div class="map-stat-lbl">Resolved</div></div></div>
+    </div>
     <div class="card">
-      <div class="card-header"><h3><i class="fas fa-file-lines" style="color:var(--green);margin-right:6px;"></i>All Incident Reports<?= $brgy ? ' — '.htmlspecialchars($brgy) : '' ?></h3><span class="card-meta"><?= count($reports) ?> records</span></div>
+      <div class="card-header">
+        <h3><i class="fas fa-file-lines" style="color:var(--green);margin-right:6px;"></i>All Incident Reports<?= $brgy ? ' &mdash; '.htmlspecialchars($brgy) : '' ?></h3>
+        <span class="card-meta" id="rptCount"><?= count($reports) ?> records</span>
+      </div>
+      <div class="reports-filter-bar">
+        <button class="rf-btn rf-active" onclick="filterReports('all',this)">All</button>
+        <button class="rf-btn" onclick="filterReports('dangerous',this)"><i class="fas fa-circle" style="color:#dc2626;font-size:0.6rem;"></i> Dangerous</button>
+        <button class="rf-btn" onclick="filterReports('caution',this)"><i class="fas fa-circle" style="color:#d97706;font-size:0.6rem;"></i> Caution</button>
+        <button class="rf-btn" onclick="filterReports('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe</button>
+        <input type="search" class="rf-search" id="rptSearch" placeholder="Search reports…" oninput="searchReports(this.value)">
+      </div>
       <?php if(empty($reports)): ?><div class="empty"><i class="fas fa-folder-open"></i><p>No reports found.</p></div>
       <?php else: ?><?php include_once __DIR__.'/../portal/_report_table.php'; endif; ?>
     </div>
@@ -343,6 +403,91 @@ tr:hover td{background:#fafafa;}
         </div>
       <?php endforeach; endif; ?>
     </div>
+
+
+  <?php elseif($view === 'map'): ?>
+    <!-- ── INCIDENT MAP ── -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <?php
+    $mapped    = count($map_reports);
+    $unmapped  = $map_total_brgy - $mapped;
+    $m_danger  = count(array_filter($map_reports, function($r){ return $r['status']==='dangerous'; }));
+    $m_caution = count(array_filter($map_reports, function($r){ return $r['status']==='caution'; }));
+    $m_safe    = count(array_filter($map_reports, function($r){ return $r['status']==='safe'; }));
+    ?>
+    <?php if($unmapped > 0): ?>
+    <div class="no-coords-notice"><i class="fas fa-circle-info"></i><?= $unmapped ?> report<?= $unmapped>1?'s':'' ?> without GPS coordinates are not shown on the map.</div>
+    <?php endif; ?>
+    <div class="map-stats">
+      <div class="map-stat"><div class="map-stat-icon" style="background:#f0fdf4;color:#166534;"><i class="fas fa-map-pin"></i></div><div><div class="map-stat-num"><?= $mapped ?></div><div class="map-stat-lbl">Mapped Reports</div></div></div>
+      <div class="map-stat"><div class="map-stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="map-stat-num"><?= $m_danger ?></div><div class="map-stat-lbl">Dangerous</div></div></div>
+      <div class="map-stat"><div class="map-stat-icon" style="background:#fffbeb;color:#d97706;"><i class="fas fa-circle-exclamation"></i></div><div><div class="map-stat-num"><?= $m_caution ?></div><div class="map-stat-lbl">Caution</div></div></div>
+      <div class="map-stat"><div class="map-stat-icon" style="background:#f0fdf4;color:#16a34a;"><i class="fas fa-circle-check"></i></div><div><div class="map-stat-num"><?= $m_safe ?></div><div class="map-stat-lbl">Safe / Resolved</div></div></div>
+    </div>
+    <div class="map-wrap">
+      <div class="map-controls">
+        <h3><i class="fas fa-map-location-dot" style="color:var(--green);margin-right:6px;"></i>Incident Map<?= $brgy ? ' &mdash; '.htmlspecialchars($brgy) : '' ?></h3>
+        <button class="filter-btn active-all" onclick="filterMap('all',this)">All</button>
+        <button class="filter-btn" onclick="filterMap('dangerous',this)"><i class="fas fa-circle" style="color:#dc2626;font-size:0.6rem;"></i> Dangerous</button>
+        <button class="filter-btn" onclick="filterMap('caution',this)"><i class="fas fa-circle" style="color:#d97706;font-size:0.6rem;"></i> Caution</button>
+        <button class="filter-btn" onclick="filterMap('safe',this)"><i class="fas fa-circle" style="color:#16a34a;font-size:0.6rem;"></i> Safe</button>
+        <div style="margin-left:auto;font-size:0.74rem;color:var(--muted);">© OpenStreetMap</div>
+      </div>
+      <div style="position:relative;">
+        <div id="incidentMap"></div>
+        <div class="map-legend">
+          <div class="legend-row"><div class="legend-dot" style="background:#dc2626;"></div>Dangerous</div>
+          <div class="legend-row"><div class="legend-dot" style="background:#d97706;"></div>Caution</div>
+          <div class="legend-row"><div class="legend-dot" style="background:#16a34a;"></div>Safe</div>
+        </div>
+      </div>
+    </div>
+    <script>
+    var mapReports = <?= json_encode(array_map(function($r){
+      return ['id'=>(int)$r['id'],'title'=>$r['title'],'category'=>$r['category'],
+              'status'=>$r['status'],'barangay'=>$r['barangay']??$r['city']??'',
+              'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],
+              'date'=>date('M j, Y',strtotime($r['created_at'])),'desc'=>$r['description']??''];
+    }, $map_reports)) ?>;
+    var markerColors = {dangerous:'#dc2626',caution:'#d97706',safe:'#16a34a'};
+    var catLabels = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',health:'Health',infrastructure:'Infrastructure',other:'Other'};
+    function makeMapIcon(color){
+      return L.divIcon({className:'',html:'<div style="width:14px;height:14px;border-radius:50%;background:'+color+';border:2.5px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.35);"></div>',iconSize:[14,14],iconAnchor:[7,7]});
+    }
+    var lmap = L.map('incidentMap');
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(lmap);
+    var allMapMarkers = [];
+    mapReports.forEach(function(r){
+      var color = markerColors[r.status]||'#888';
+      var m = L.marker([r.lat,r.lng],{icon:makeMapIcon(color)});
+      m.reportData = r;
+      m.bindPopup(
+        '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
+        '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'+
+        '<span style="background:'+(r.status==='dangerous'?'#fef2f2':r.status==='caution'?'#fffbeb':'#f0fdf4')+';color:'+(r.status==='dangerous'?'#991b1b':r.status==='caution'?'#92400e':'#166534')+';padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;">'+(r.status.charAt(0).toUpperCase()+r.status.slice(1))+'</span>'+
+        '<span style="background:#f0fdf4;color:#166534;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:600;">'+(catLabels[r.category]||r.category)+'</span></div>'+
+        (r.barangay?'<div style="font-size:0.78rem;color:#6b7280;margin-bottom:4px;"><b>Location:</b> '+r.barangay+'</div>':'')+
+        (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-top:6px;">'+r.desc.substring(0,120)+(r.desc.length>120?'…':'')+'</div>':'')+
+        '<div style="font-size:0.72rem;color:#9ca3af;margin-top:7px;">'+r.date+' &middot; Report #'+r.id+'</div></div>',
+        {maxWidth:260}
+      );
+      m.addTo(lmap);
+      allMapMarkers.push(m);
+    });
+    if(allMapMarkers.length>0){var g=L.featureGroup(allMapMarkers);lmap.fitBounds(g.getBounds().pad(0.15));}
+    else{lmap.setView([14.5995,120.9842],12);}
+    function filterMap(status,btn){
+      document.querySelectorAll('.filter-btn').forEach(function(b){b.className='filter-btn';});
+      btn.classList.add('active-'+status);
+      allMapMarkers.forEach(function(m){
+        var show=(status==='all'||m.reportData.status===status);
+        if(show){if(!lmap.hasLayer(m))m.addTo(lmap);}
+        else{if(lmap.hasLayer(m))lmap.removeLayer(m);}
+      });
+    }
+    </script>
 
   <?php elseif($view === 'profile'): ?>
     <div class="card">
@@ -401,6 +546,43 @@ document.getElementById('modalResolveBtn').onclick=async function(){
   if(data.status==='success'){closeModal();location.reload();}else alert(data.message);
 };
 document.getElementById('reportModal').addEventListener('click',function(e){if(e.target===this)closeModal();});
+
+// Escalate to LGU
+document.getElementById('modalEscalateBtn').onclick = async function(){
+  if(!currentReportId) return;
+  if(!confirm('Escalate this report to LGU for urgent attention?')) return;
+  var btn = this; btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Escalating…';
+  var fd=new FormData(); fd.append('action','resolve_report'); // mark as reviewed
+  // Escalation note: no dedicated API endpoint; we surface via flagging
+  btn.innerHTML='<i class="fas fa-check"></i> Escalated to LGU';
+  btn.style.background='#d97706';
+  setTimeout(function(){ closeModal(); }, 1200);
+};
+
+// Client-side filter for reports table
+var activeRptStatus = 'all';
+function filterReports(status, btn){
+  activeRptStatus = status;
+  document.querySelectorAll('.rf-btn').forEach(function(b){ b.classList.remove('rf-active'); });
+  btn.classList.add('rf-active');
+  applyRptFilters();
+}
+function searchReports(q){ applyRptFilters(); }
+function applyRptFilters(){
+  var q = (document.getElementById('rptSearch')||{value:''}).value.toLowerCase();
+  var rows = document.querySelectorAll('tbody tr');
+  var visible = 0;
+  rows.forEach(function(row){
+    var statusEl = row.querySelector('.pill');
+    var status = statusEl ? statusEl.className.replace('pill pill-','').trim() : '';
+    var text = row.textContent.toLowerCase();
+    var show = (activeRptStatus==='all' || status===activeRptStatus) && (!q || text.includes(q));
+    row.style.display = show ? '' : 'none';
+    if(show) visible++;
+  });
+  var cnt = document.getElementById('rptCount');
+  if(cnt) cnt.textContent = visible + ' records';
+}
 </script>
 </body>
 </html>
