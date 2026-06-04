@@ -14,8 +14,7 @@ define('DB_USER', 'root');
 define('DB_PASS', '');
 define('DB_NAME', 'sentri');
 
-// ── Simple lock – prevents re-running if DB already fully exists ─────────────
-$steps   = [];   // log of each step
+$steps   = [];
 $success = true;
 
 // ── Connect WITHOUT selecting a database first ───────────────────────────────
@@ -51,44 +50,56 @@ run($conn, 'Create database <code>sentri</code>',
 $conn->select_db(DB_NAME);
 $steps[] = ['ok', 'Selected database <code>' . DB_NAME . '</code>'];
 
-// Disable FK checks during setup
 $conn->query("SET FOREIGN_KEY_CHECKS = 0");
 
 // ── 2. users ─────────────────────────────────────────────────────────────────
-run($conn, 'Create table <code>users</code> (with email verification & password reset columns)',
+run($conn, 'Create table <code>users</code>',
     "CREATE TABLE IF NOT EXISTS `users` (
-        `id`                  INT(11)      NOT NULL AUTO_INCREMENT,
-        `first_name`          VARCHAR(100) NOT NULL,
-        `last_name`           VARCHAR(100) NOT NULL,
-        `email`               VARCHAR(191) NOT NULL,
-        `phone_number`        VARCHAR(30)  DEFAULT NULL,
-        `password`            VARCHAR(255) NOT NULL,
-        `role`                ENUM('user','admin') NOT NULL DEFAULT 'user',
-        `email_verified`      TINYINT(1)   NOT NULL DEFAULT 0
-            COMMENT '0 = pending verification, 1 = verified',
-        `verification_token`  VARCHAR(64)  DEFAULT NULL
-            COMMENT 'Email verification token (64-char hex)',
-        `token_expires_at`    DATETIME     DEFAULT NULL
-            COMMENT 'Verification token expiry (24 hours)',
-        `reset_token`         VARCHAR(64)  DEFAULT NULL
-            COMMENT 'Password reset token (64-char hex)',
-        `reset_token_expires` DATETIME     DEFAULT NULL
-            COMMENT 'Password reset token expiry (1 hour)',
-        `avatar_color`        VARCHAR(7)   NOT NULL DEFAULT '#1c57b2'
-            COMMENT 'Hex colour for user avatar',
+        `id`                  INT(11)       NOT NULL AUTO_INCREMENT,
+        `first_name`          VARCHAR(100)  NOT NULL,
+        `last_name`           VARCHAR(100)  NOT NULL,
+        `email`               VARCHAR(191)  NOT NULL,
+        `phone_number`        VARCHAR(30)   DEFAULT NULL,
+        `password`            VARCHAR(255)  NOT NULL,
+        `role`                ENUM('user','community','barangay','lgu','first_responder','admin')
+                                            NOT NULL DEFAULT 'community',
+        `org_name`            VARCHAR(255)  DEFAULT NULL,
+        `position`            VARCHAR(150)  DEFAULT NULL,
+        `barangay_name`       VARCHAR(150)  DEFAULT NULL,
+        `municipality`        VARCHAR(150)  DEFAULT NULL,
+        `responder_type`      VARCHAR(30)   DEFAULT NULL,
+        `is_approved`         TINYINT(1)    NOT NULL DEFAULT 0,
+        `email_verified`      TINYINT(1)    NOT NULL DEFAULT 0,
+        `verification_token`  VARCHAR(64)   DEFAULT NULL,
+        `token_expires_at`    DATETIME      DEFAULT NULL,
+        `reset_token`         VARCHAR(64)   DEFAULT NULL,
+        `reset_token_expires` DATETIME      DEFAULT NULL,
+        `avatar_color`        VARCHAR(7)    NOT NULL DEFAULT '#1c57b2',
         `gps_lat`             DECIMAL(10,7) DEFAULT NULL,
         `gps_lng`             DECIMAL(10,7) DEFAULT NULL,
-        `created_at`          TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        `created_at`          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (`id`),
-        UNIQUE KEY `uq_email`              (`email`),
-        KEY        `idx_reset_token`       (`reset_token`),
-        KEY        `idx_verification_token`(`verification_token`)
+        UNIQUE KEY `uq_email`               (`email`),
+        KEY        `idx_reset_token`        (`reset_token`),
+        KEY        `idx_verification_token` (`verification_token`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
 );
 
-// ── 2b. Ensure all required columns exist on users (for existing installs) ──
-// Safe to run on fresh installs — IF NOT EXISTS means nothing breaks.
+// ── 2b. Backfill any columns missing on existing installs ────────────────────
+$conn->query("USE `sentri`");
+$existingCols = [];
+$colRes = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_SCHEMA='sentri' AND TABLE_NAME='users'");
+if ($colRes) { while ($r = $colRes->fetch_row()) $existingCols[] = $r[0]; $colRes->free(); }
+
 $userColChecks = [
+    'phone_number'        => "ALTER TABLE `users` ADD COLUMN `phone_number` VARCHAR(30) DEFAULT NULL AFTER `email`",
+    'org_name'            => "ALTER TABLE `users` ADD COLUMN `org_name` VARCHAR(255) DEFAULT NULL",
+    'position'            => "ALTER TABLE `users` ADD COLUMN `position` VARCHAR(150) DEFAULT NULL",
+    'barangay_name'       => "ALTER TABLE `users` ADD COLUMN `barangay_name` VARCHAR(150) DEFAULT NULL",
+    'municipality'        => "ALTER TABLE `users` ADD COLUMN `municipality` VARCHAR(150) DEFAULT NULL",
+    'responder_type'      => "ALTER TABLE `users` ADD COLUMN `responder_type` VARCHAR(30) DEFAULT NULL",
+    'is_approved'         => "ALTER TABLE `users` ADD COLUMN `is_approved` TINYINT(1) NOT NULL DEFAULT 0",
     'email_verified'      => "ALTER TABLE `users` ADD COLUMN `email_verified` TINYINT(1) NOT NULL DEFAULT 0 AFTER `role`",
     'verification_token'  => "ALTER TABLE `users` ADD COLUMN `verification_token` VARCHAR(64) DEFAULT NULL AFTER `email_verified`",
     'token_expires_at'    => "ALTER TABLE `users` ADD COLUMN `token_expires_at` DATETIME DEFAULT NULL AFTER `verification_token`",
@@ -97,12 +108,8 @@ $userColChecks = [
     'avatar_color'        => "ALTER TABLE `users` ADD COLUMN `avatar_color` VARCHAR(7) NOT NULL DEFAULT '#1c57b2'",
     'gps_lat'             => "ALTER TABLE `users` ADD COLUMN `gps_lat` DECIMAL(10,7) DEFAULT NULL",
     'gps_lng'             => "ALTER TABLE `users` ADD COLUMN `gps_lng` DECIMAL(10,7) DEFAULT NULL",
-    'phone_number'        => "ALTER TABLE `users` ADD COLUMN `phone_number` VARCHAR(30) DEFAULT NULL AFTER `email`",
 ];
-$conn->query("USE `sentri`");
-$existingCols = [];
-$colRes = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='sentri' AND TABLE_NAME='users'");
-if ($colRes) { while ($r = $colRes->fetch_row()) $existingCols[] = $r[0]; }
+
 foreach ($userColChecks as $col => $sql) {
     if (!in_array($col, $existingCols)) {
         if ($conn->query($sql)) {
@@ -111,11 +118,35 @@ foreach ($userColChecks as $col => $sql) {
             $steps[] = ['error', "Failed to add <code>$col</code>: " . htmlspecialchars($conn->error)];
         }
     } else {
-        $steps[] = ['skip', "Column <code>$col</code> already exists in <code>users</code> — skipped"];
+        $steps[] = ['skip', "Column <code>$col</code> already exists — skipped"];
     }
 }
-// Mark existing unverified users as verified so no lockout
-$conn->query("UPDATE `users` SET `email_verified`=1 WHERE `email_verified`=0 AND `created_at` < NOW()");
+
+// ── 2c. Ensure role ENUM includes all community roles ────────────────────────
+$enumRes = $conn->query("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+                         WHERE TABLE_SCHEMA='sentri' AND TABLE_NAME='users' AND COLUMN_NAME='role'");
+if ($enumRes) {
+    $enumRow = $enumRes->fetch_row();
+    $enumRes->free();
+    if ($enumRow && strpos($enumRow[0], 'first_responder') === false) {
+        if ($conn->query("ALTER TABLE `users` MODIFY COLUMN `role`
+            ENUM('user','community','barangay','lgu','first_responder','admin')
+            NOT NULL DEFAULT 'community'")) {
+            $steps[] = ['ok', 'Expanded <code>role</code> ENUM to include all community roles'];
+        } else {
+            $steps[] = ['error', 'Failed to expand role ENUM: ' . htmlspecialchars($conn->error)];
+        }
+    } else {
+        $steps[] = ['skip', '<code>role</code> ENUM already includes all roles — skipped'];
+    }
+}
+
+// ── 2d. Seed approvals & verifications for pre-existing users ────────────────
+$conn->query("UPDATE `users` SET `is_approved`=1
+              WHERE `role` IN('user','community','admin') AND `is_approved`=0");
+$conn->query("UPDATE `users` SET `email_verified`=1
+              WHERE `email_verified`=0 AND `created_at` < NOW()");
+$steps[] = ['ok', 'Pre-existing users marked as approved/verified'];
 
 // ── 3. reports ───────────────────────────────────────────────────────────────
 run($conn, 'Create table <code>reports</code>',
@@ -128,6 +159,9 @@ run($conn, 'Create table <code>reports</code>',
         `barangay`      VARCHAR(150) DEFAULT NULL,
         `city`          VARCHAR(150) NOT NULL,
         `province`      VARCHAR(150) DEFAULT NULL,
+        `latitude`      DECIMAL(10,7) DEFAULT NULL,
+        `longitude`     DECIMAL(10,7) DEFAULT NULL,
+        `radius_m`      INT(11)      DEFAULT 200,
         `status`        ENUM('dangerous','caution','safe') NOT NULL DEFAULT 'caution',
         `category`      ENUM('crime','accident','flooding','fire','health','infrastructure','other') NOT NULL DEFAULT 'other',
         `upvotes`       INT(11)      NOT NULL DEFAULT 0,
@@ -139,84 +173,156 @@ run($conn, 'Create table <code>reports</code>',
         KEY `idx_user_id`    (`user_id`),
         KEY `idx_status`     (`status`),
         KEY `idx_city`       (`city`),
-        KEY `idx_is_archived`(`is_archived`)
+        KEY `idx_is_archived`(`is_archived`),
+        KEY `idx_lat_lng`    (`latitude`, `longitude`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
 );
 
 // ── 4. report_votes ──────────────────────────────────────────────────────────
 run($conn, 'Create table <code>report_votes</code>',
     "CREATE TABLE IF NOT EXISTS `report_votes` (
-        `id`         INT(11)          NOT NULL AUTO_INCREMENT,
-        `report_id`  INT(11)          NOT NULL,
-        `user_id`    INT(11)          NOT NULL,
+        `id`         INT(11)           NOT NULL AUTO_INCREMENT,
+        `report_id`  INT(11)           NOT NULL,
+        `user_id`    INT(11)           NOT NULL,
         `vote`       ENUM('up','down') NOT NULL,
-        `created_at` TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        `created_at` TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (`id`),
         UNIQUE KEY `uq_vote` (`report_id`, `user_id`),
         KEY `idx_user_id` (`user_id`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
 );
 
+run($conn, "Create table <code>report_audit_logs</code>",
+    "CREATE TABLE IF NOT EXISTS `report_audit_logs` (
+    `id`                int(11)                              NOT NULL AUTO_INCREMENT,
+    `report_id`         int(11)                              NOT NULL,
+    `report_title`      varchar(255)                         NOT NULL,
+    `action`            enum('archived', 'restored')         NOT NULL,
+    `performed_by`      int(11)                              DEFAULT NULL,
+    `performed_by_name` varchar(150)                         NOT NULL,
+    `performed_at`      timestamp                            NOT NULL DEFAULT current_timestamp(),
+    PRIMARY KEY (`id`),
+    KEY `report_id`     (`report_id`),
+    KEY `performed_by`  (`performed_by`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+);
+
+run($conn, 'Create table <code>flagged_accounts</code>',
+    "CREATE TABLE IF NOT EXISTS `flagged_accounts`(`id`           int(11)       NOT NULL AUTO_INCREMENT,
+  `user_id`      int(11)       NOT NULL,
+  `risk_level`   enum('low','medium','high') NOT NULL DEFAULT 'medium',
+  `failed_count` int(11)       NOT NULL DEFAULT 0,
+  `flagged_at`   timestamp     NOT NULL DEFAULT current_timestamp(),
+  `last_attempt` timestamp     NULL DEFAULT NULL,
+  `notes`        text,
+  `reviewed`     tinyint(1)    NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `user_id`      (`user_id`),
+  KEY `risk_level`   (`risk_level`),
+  KEY `flagged_at`   (`flagged_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+);
+
+run($conn, 'Create table <code>security_scans</code>',
+    "CREATE TABLE IF NOT EXISTS `security_scans` (
+        `id`                        INT(11)      NOT NULL AUTO_INCREMENT,
+        `scanned_at`                TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        `https_status`              ENUM('passed','warning','critical') NOT NULL,
+        `session_status`            ENUM('passed','warning','critical') NOT NULL,
+        `password_hash_status`      ENUM('passed','warning','critical') NOT NULL,
+        `security_headers_status`   ENUM('passed','warning','critical') NOT NULL,
+        `upload_restrictions_status` ENUM('passed','warning','critical') NOT NULL,
+        `score`                     INT(11)      NOT NULL DEFAULT 0,
+        `details`                   TEXT         DEFAULT NULL,
+        PRIMARY KEY (`id`),
+        KEY `idx_scanned_at`        (`scanned_at`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+);
+
 // ── 5. login_logs ────────────────────────────────────────────────────────────
 run($conn, 'Create table <code>login_logs</code>',
     "CREATE TABLE IF NOT EXISTS `login_logs` (
-        `id`         INT(11)            NOT NULL AUTO_INCREMENT,
-        `user_id`    INT(11)            DEFAULT NULL,
-        `email`      VARCHAR(191)       NOT NULL,
-        `ip_address` VARCHAR(100)       DEFAULT NULL,
-        `device`     TEXT               DEFAULT NULL,
+        `id`         INT(11)                 NOT NULL AUTO_INCREMENT,
+        `user_id`    INT(11)                 DEFAULT NULL,
+        `email`      VARCHAR(191)            NOT NULL,
+        `ip_address` VARCHAR(100)            DEFAULT NULL,
+        `device`     TEXT                    DEFAULT NULL,
         `status`     ENUM('Success','Failed') NOT NULL,
-        `created_at` TIMESTAMP          NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        `created_at` TIMESTAMP               NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (`id`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
 );
 
-// ── 6. Foreign keys (add only if not already present) ────────────────────────
-// reports.user_id → users.id
-$fk1 = $conn->query("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
-    WHERE TABLE_SCHEMA='" . DB_NAME . "' AND TABLE_NAME='reports'
-    AND CONSTRAINT_NAME='fk_reports_user' LIMIT 1");
-if ($fk1 && $fk1->num_rows === 0) {
-    run($conn, 'Add foreign key <code>fk_reports_user</code>',
-        "ALTER TABLE `reports`
-         ADD CONSTRAINT `fk_reports_user`
-         FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE"
-    );
-} else {
-    $steps[] = ['skip', 'Foreign key <code>fk_reports_user</code> already exists — skipped'];
-}
+// ── 6. report_images ─────────────────────────────────────────────────────────
+run($conn, 'Create table <code>report_images</code>',
+    "CREATE TABLE IF NOT EXISTS `report_images` (
+        `id`            INT(11)      NOT NULL AUTO_INCREMENT,
+        `report_id`     INT(11)      NOT NULL,
+        `file_name`     VARCHAR(255) NOT NULL,
+        `original_name` VARCHAR(255) DEFAULT NULL,
+        `mime_type`     VARCHAR(100) DEFAULT NULL,
+        `file_size`     INT(11)      DEFAULT NULL,
+        `uploaded_at`   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (`id`),
+        KEY `report_id` (`report_id`),
+        CONSTRAINT `fk_images_report` FOREIGN KEY (`report_id`)
+            REFERENCES `reports` (`id`) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+);
 
-// report_votes.report_id → reports.id
-$fk2 = $conn->query("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
-    WHERE TABLE_SCHEMA='" . DB_NAME . "' AND TABLE_NAME='report_votes'
-    AND CONSTRAINT_NAME='fk_votes_report' LIMIT 1");
-if ($fk2 && $fk2->num_rows === 0) {
-    run($conn, 'Add foreign key <code>fk_votes_report</code>',
-        "ALTER TABLE `report_votes`
-         ADD CONSTRAINT `fk_votes_report`
-         FOREIGN KEY (`report_id`) REFERENCES `reports` (`id`) ON DELETE CASCADE"
-    );
-} else {
-    $steps[] = ['skip', 'Foreign key <code>fk_votes_report</code> already exists — skipped'];
-}
+// ── 7. emergency_contacts ────────────────────────────────────────────────────
+run($conn, 'Create table <code>emergency_contacts</code>',
+    "CREATE TABLE IF NOT EXISTS `emergency_contacts` (
+        `id`             INT(11)     NOT NULL AUTO_INCREMENT,
+        `name`           VARCHAR(255) NOT NULL,
+        `type`           ENUM('lgu','hospital','traffic','barangay','police','fire','other') NOT NULL DEFAULT 'other',
+        `barangay`       VARCHAR(150) DEFAULT NULL,
+        `city`           VARCHAR(150) NOT NULL,
+        `province`       VARCHAR(150) DEFAULT NULL,
+        `contact_number` VARCHAR(50)  DEFAULT NULL,
+        `contact_email`  VARCHAR(191) DEFAULT NULL,
+        `is_active`      TINYINT(1)   NOT NULL DEFAULT 1,
+        `created_at`     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        `updated_at`     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (`id`),
+        KEY `idx_city` (`city`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+);
 
-// report_votes.user_id → users.id
-$fk3 = $conn->query("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
-    WHERE TABLE_SCHEMA='" . DB_NAME . "' AND TABLE_NAME='report_votes'
-    AND CONSTRAINT_NAME='fk_votes_user' LIMIT 1");
-if ($fk3 && $fk3->num_rows === 0) {
-    run($conn, 'Add foreign key <code>fk_votes_user</code>',
-        "ALTER TABLE `report_votes`
-         ADD CONSTRAINT `fk_votes_user`
-         FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE"
-    );
-} else {
-    $steps[] = ['skip', 'Foreign key <code>fk_votes_user</code> already exists — skipped'];
+// ── 8. contact_notifications ─────────────────────────────────────────────────
+run($conn, 'Create table <code>contact_notifications</code>',
+    "CREATE TABLE IF NOT EXISTS `contact_notifications` (
+        `id`         INT(11) NOT NULL AUTO_INCREMENT,
+        `report_id`  INT(11) NOT NULL,
+        `contact_id` INT(11) NOT NULL,
+        `method`     ENUM('email','sms','auto_call') NOT NULL DEFAULT 'email',
+        `status`     ENUM('sent','failed','pending')  NOT NULL DEFAULT 'pending',
+        `sent_at`    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (`id`),
+        KEY `report_id` (`report_id`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
+);
+
+// ── 9. Foreign keys ──────────────────────────────────────────────────────────
+$fkChecks = [
+    ['reports',      'fk_reports_user',  "ALTER TABLE `reports` ADD CONSTRAINT `fk_reports_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE"],
+    ['report_votes', 'fk_votes_report',  "ALTER TABLE `report_votes` ADD CONSTRAINT `fk_votes_report` FOREIGN KEY (`report_id`) REFERENCES `reports` (`id`) ON DELETE CASCADE"],
+    ['report_votes', 'fk_votes_user',    "ALTER TABLE `report_votes` ADD CONSTRAINT `fk_votes_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE"],
+];
+foreach ($fkChecks as [$tbl, $name, $sql]) {
+    $fkRes = $conn->query("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+        WHERE TABLE_SCHEMA='" . DB_NAME . "' AND TABLE_NAME='$tbl' AND CONSTRAINT_NAME='$name' LIMIT 1");
+    if ($fkRes && $fkRes->num_rows === 0) {
+        run($conn, "Add foreign key <code>$name</code>", $sql);
+    } else {
+        $steps[] = ['skip', "Foreign key <code>$name</code> already exists — skipped"];
+    }
+    if ($fkRes) $fkRes->free();
 }
 
 $conn->query("SET FOREIGN_KEY_CHECKS = 1");
 
-// ── 7. Default admin account ─────────────────────────────────────────────────
+// ── 10. Default admin account ─────────────────────────────────────────────────
 $chk = $conn->prepare("SELECT id FROM users WHERE email = ? LIMIT 1");
 $adminEmail = 'admin@sentri.ph';
 $chk->bind_param("s", $adminEmail);
@@ -225,13 +331,13 @@ $chk->store_result();
 
 if ($chk->num_rows === 0) {
     $chk->close();
-    // password: Admin@1234
     $hash  = password_hash('Admin@1234', PASSWORD_BCRYPT, ['cost' => 12]);
-    $fname = 'SenTri'; $lname = 'Admin'; $role = 'admin';
+    $fname = 'SenTri'; $lname = 'Admin'; $role = 'admin'; $approved = 1; $verified = 1;
     $ins   = $conn->prepare(
-        "INSERT INTO users (first_name, last_name, email, password, role) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO users (first_name, last_name, email, password, role, is_approved, email_verified)
+         VALUES (?, ?, ?, ?, ?, ?, ?)"
     );
-    $ins->bind_param("sssss", $fname, $lname, $adminEmail, $hash, $role);
+    $ins->bind_param("sssssii", $fname, $lname, $adminEmail, $hash, $role, $approved, $verified);
     if ($ins->execute()) {
         $steps[] = ['ok', 'Default admin created — <strong>admin@sentri.ph</strong> / <strong>Admin@1234</strong>'];
     } else {
@@ -244,73 +350,13 @@ if ($chk->num_rows === 0) {
     $steps[] = ['skip', 'Admin account <code>admin@sentri.ph</code> already exists — skipped'];
 }
 
-// ── 8. report_images table ───────────────────────────────────────────────────
-run($conn, 'Create table <code>report_images</code> (photo attachments)',
-    "CREATE TABLE IF NOT EXISTS `report_images` (
-      `id`            int(11)      NOT NULL AUTO_INCREMENT,
-      `report_id`     int(11)      NOT NULL,
-      `file_name`     varchar(255) NOT NULL,
-      `original_name` varchar(255) DEFAULT NULL,
-      `mime_type`     varchar(100) DEFAULT NULL,
-      `file_size`     int(11)      DEFAULT NULL,
-      `uploaded_at`   timestamp    NOT NULL DEFAULT current_timestamp(),
-      PRIMARY KEY (`id`),
-      KEY `report_id` (`report_id`),
-      CONSTRAINT `fk_images_report` FOREIGN KEY (`report_id`)
-        REFERENCES `reports` (`id`) ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
-);
-
-// ── 9. emergency_contacts table ───────────────────────────────────────────────
-run($conn, 'Create table <code>emergency_contacts</code> (LGU, Hospital, Traffic, etc.)',
-    "CREATE TABLE IF NOT EXISTS `emergency_contacts` (
-      `id`             int(11)      NOT NULL AUTO_INCREMENT,
-      `name`           varchar(255) NOT NULL,
-      `type`           enum('lgu','hospital','traffic','barangay','police','fire','other') NOT NULL DEFAULT 'other',
-      `barangay`       varchar(150) DEFAULT NULL,
-      `city`           varchar(150) NOT NULL,
-      `province`       varchar(150) DEFAULT NULL,
-      `contact_number` varchar(50)  DEFAULT NULL,
-      `contact_email`  varchar(191) DEFAULT NULL,
-      `is_active`      tinyint(1)   NOT NULL DEFAULT 1,
-      `created_at`     timestamp    NOT NULL DEFAULT current_timestamp(),
-      `updated_at`     timestamp    NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
-      PRIMARY KEY (`id`),
-      KEY `idx_city` (`city`)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
-);
-
-// ── 10. contact_notifications table ──────────────────────────────────────────
-run($conn, 'Create table <code>contact_notifications</code> (notification log)',
-    "CREATE TABLE IF NOT EXISTS `contact_notifications` (
-      `id`         int(11) NOT NULL AUTO_INCREMENT,
-      `report_id`  int(11) NOT NULL,
-      `contact_id` int(11) NOT NULL,
-      `method`     enum('email','sms','auto_call') NOT NULL DEFAULT 'email',
-      `status`     enum('sent','failed','pending')  NOT NULL DEFAULT 'pending',
-      `sent_at`    timestamp NOT NULL DEFAULT current_timestamp(),
-      PRIMARY KEY (`id`),
-      KEY `report_id` (`report_id`)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
-);
-
-// ── 11. Add phone_number column to users ─────────────────────────────────────
-$colCheck = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE TABLE_SCHEMA='sentri' AND TABLE_NAME='users' AND COLUMN_NAME='phone_number'");
-if ($colCheck && $colCheck->num_rows === 0) {
-    run($conn, 'Add <code>phone_number</code> column to <code>users</code>',
-        "ALTER TABLE `users` ADD COLUMN `phone_number` varchar(30) DEFAULT NULL AFTER `email`");
-} else {
-    $steps[] = ['skip', 'Column <code>phone_number</code> already exists — skipped'];
-}
-
-// ── Create uploads directory if writable ─────────────────────────────────────
+// ── 11. uploads directory ────────────────────────────────────────────────────
 $uploadsDir = __DIR__ . '/uploads/reports/';
 if (!is_dir($uploadsDir)) {
     if (@mkdir($uploadsDir, 0755, true)) {
         $steps[] = ['ok', 'Created directory <code>uploads/reports/</code>'];
     } else {
-        $steps[] = ['error', 'Could not create <code>uploads/reports/</code> — create it manually and set chmod 755'];
+        $steps[] = ['error', 'Could not create <code>uploads/reports/</code> — create it manually (chmod 755)'];
     }
 } else {
     $steps[] = ['skip', 'Directory <code>uploads/reports/</code> already exists'];
@@ -318,7 +364,6 @@ if (!is_dir($uploadsDir)) {
 
 $conn->close();
 
-// ── Render ────────────────────────────────────────────────────────────────────
 render($steps, $success);
 
 function render(array $steps, bool $success): void { ?>
@@ -333,22 +378,13 @@ function render(array $steps, bool $success): void { ?>
 <style>
   * { box-sizing:border-box; margin:0; padding:0; font-family:'Poppins',sans-serif; }
   body { background:#f0f2f7; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:30px; }
-
-  .card {
-    background:#fff; border-radius:18px; padding:36px 40px;
-    box-shadow:0 8px 32px rgba(0,0,0,0.1); width:100%; max-width:620px;
-  }
-
+  .card { background:#fff; border-radius:18px; padding:36px 40px; box-shadow:0 8px 32px rgba(0,0,0,0.1); width:100%; max-width:640px; }
   .card-header { display:flex; align-items:center; gap:14px; margin-bottom:28px; }
   .card-header i { font-size:2.2rem; color:#1c57b2; }
   .card-header div h1 { font-size:1.4rem; font-weight:700; color:#1a1a2e; }
   .card-header div p  { font-size:0.83rem; color:#888; margin-top:2px; }
-
   .steps { display:flex; flex-direction:column; gap:8px; margin-bottom:28px; }
-  .step {
-    display:flex; align-items:flex-start; gap:12px;
-    padding:10px 14px; border-radius:9px; font-size:0.86rem; line-height:1.5;
-  }
+  .step { display:flex; align-items:flex-start; gap:12px; padding:10px 14px; border-radius:9px; font-size:0.86rem; line-height:1.5; }
   .step.ok    { background:#f0fff4; color:#276749; }
   .step.error { background:#fff5f5; color:#c53030; }
   .step.skip  { background:#fafafa; color:#888; }
@@ -358,11 +394,7 @@ function render(array $steps, bool $success): void { ?>
   .step.skip  i { color:#bbb; }
   .step code { background:rgba(0,0,0,0.06); padding:1px 5px; border-radius:4px; font-size:0.82rem; }
   .step strong { font-weight:600; }
-
-  .result {
-    border-radius:12px; padding:18px 20px;
-    display:flex; align-items:center; gap:14px;
-  }
+  .result { border-radius:12px; padding:18px 20px; display:flex; align-items:center; gap:14px; }
   .result.success { background:linear-gradient(135deg,#f0fff4,#e6ffed); border:1.5px solid #9ae6b4; }
   .result.fail    { background:linear-gradient(135deg,#fff5f5,#ffe5e5); border:1.5px solid #feb2b2; }
   .result i { font-size:1.8rem; flex-shrink:0; }
@@ -372,24 +404,11 @@ function render(array $steps, bool $success): void { ?>
   .result.success div h2 { color:#276749; }
   .result.fail    div h2 { color:#c53030; }
   .result div p { font-size:0.82rem; color:#555; line-height:1.6; }
-
   .actions { margin-top:22px; display:flex; gap:12px; flex-wrap:wrap; }
-  .btn {
-    display:inline-flex; align-items:center; gap:8px;
-    padding:10px 22px; border-radius:9px; font-size:0.88rem;
-    font-weight:600; text-decoration:none; transition:0.2s; cursor:pointer; border:none;
-    font-family:'Poppins',sans-serif;
-  }
+  .btn { display:inline-flex; align-items:center; gap:8px; padding:10px 22px; border-radius:9px; font-size:0.88rem; font-weight:600; text-decoration:none; transition:0.2s; cursor:pointer; border:none; font-family:'Poppins',sans-serif; }
   .btn-primary { background:#1c57b2; color:#fff; }
   .btn-primary:hover { background:#164eab; }
-  .btn-danger  { background:#fff0f0; color:#e53e3e; border:1.5px solid #feb2b2; }
-  .btn-danger:hover { background:#e53e3e; color:#fff; }
-
-  .warning-box {
-    margin-top:20px; background:#fffbeb; border:1.5px solid #f6e05e;
-    border-radius:10px; padding:13px 16px; font-size:0.82rem; color:#744210;
-    display:flex; align-items:flex-start; gap:10px;
-  }
+  .warning-box { margin-top:20px; background:#fffbeb; border:1.5px solid #f6e05e; border-radius:10px; padding:13px 16px; font-size:0.82rem; color:#744210; display:flex; align-items:flex-start; gap:10px; }
   .warning-box i { color:#d69e2e; margin-top:2px; flex-shrink:0; }
 </style>
 </head>

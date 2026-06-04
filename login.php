@@ -1,652 +1,570 @@
 <?php
+ini_set('display_errors', 0);
+ob_start();
 session_start();
-if (isset($_SESSION['user_id'])) { header("Location: dashboard.php"); exit; }
+if (isset($_SESSION['user_id'])) {
+    require_once __DIR__ . '/config/auth.php';
+    redirect_to_portal();
+}
 require __DIR__ . '/config/db.php';
+require_once __DIR__ . '/config/auth.php';
+
+function getFailedAttemptsCount($conn, $email, $minutes = 30) {
+    $cutoff = date('Y-m-d H:i:s', strtotime("-{$minutes} minutes"));
+    $stmt = $conn->prepare("SELECT COUNT(*) FROM login_logs WHERE email = ? AND status = 'Failed' AND created_at >= ?");
+    $stmt->bind_param("ss", $email, $cutoff);
+    $stmt->execute();
+    $stmt->bind_result($count);
+    $stmt->fetch();
+    $stmt->close();
+    return (int)$count;
+}
+
+function isLockedOut($conn, $email) {
+    $stmt = $conn->prepare("SELECT COUNT(*) FROM login_logs WHERE email = ? AND status = 'Locked' AND created_at >= NOW() - INTERVAL 30 SECOND");
+    $stmt->bind_param("s", $email);
+    $stmt->execute();
+    $stmt->bind_result($count);
+    $stmt->fetch();
+    $stmt->close();
+    return $count > 0;
+}
+
+function flagHighRiskAttempt($conn, $email) {
+    $failed_count = getFailedAttemptsCount($conn, $email, 30);
+    if ($failed_count >= 5) {
+        $user_id = 0;
+        $stmt = $conn->prepare("SELECT id FROM users WHERE email = ? LIMIT 1");
+        $stmt->bind_param("s", $email);
+        $stmt->execute();
+        $stmt->bind_result($user_id);
+        $stmt->fetch();
+        $stmt->close();
+
+        $stmt = $conn->prepare("INSERT INTO flagged_accounts (user_id, risk_level, failed_count, last_attempt, notes, reviewed) VALUES (?, 'high', ?, NOW(), 'Multiple failed login attempts detected', 0) ON DUPLICATE KEY UPDATE risk_level = 'high', failed_count = ?, last_attempt = NOW(), reviewed = 0");
+        $stmt->bind_param("iii", $user_id, $failed_count, $failed_count);
+        $stmt->execute();
+        $stmt->close();
+
+        $stmt = $conn->prepare("SELECT COUNT(*) FROM login_logs WHERE email = ? AND status = 'Locked' AND created_at >= NOW() - INTERVAL 30 SECOND");
+        $stmt->bind_param("s", $email);
+        $stmt->execute();
+        $stmt->bind_result($lock_count);
+        $stmt->fetch();
+        $stmt->close();
+
+        if ($lock_count === 0) {
+            $stmt = $conn->prepare("INSERT INTO login_logs (user_id, email, ip_address, device, status) VALUES (?, ?, 'Lockout', 'System', 'Locked')");
+            $stmt->bind_param("is", $user_id, $email);
+            $stmt->execute();
+            $stmt->close();
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+function sendLoginOtpEmail($email, $name, $otp) {
+    require_once __DIR__ . '/core/SenTriMailer.php';
+    $subject = 'Your SenTri login code';
+    $html = '<div style="font-family:Arial,sans-serif;color:#111;line-height:1.6;">'
+          . '<h2 style="color:#1a1a2e;">Your SenTri login code</h2>'
+          . '<p>Use the code below to complete your Community portal sign in.</p>'
+          . '<p style="font-size:2rem;font-weight:700;margin:18px 0;letter-spacing:0.2rem;">' . htmlspecialchars($otp, ENT_QUOTES, 'UTF-8') . '</p>'
+          . '<p style="margin-top:10px;color:#555;">This code expires in 10 minutes. Do not share it with anyone.</p>'
+          . '<hr style="border:none;border-top:1px solid #eee;margin:22px 0;">'
+          . '<p style="font-size:0.9rem;color:#777;">If you did not request this code, ignore this email.</p>'
+          . '</div>';
+    try {
+        $mailer = new SenTriMailer();
+        return $mailer->send($email, $name, $subject, $html);
+    } catch (Throwable $e) {
+        error_log('OTP email error: ' . $e->getMessage());
+        return false;
+    }
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
-    $email    = trim($_POST['email'] ?? '');
+    $action   = trim($_POST['action'] ?? '');
+    $email    = trim($_POST['email']    ?? '');
     $password = trim($_POST['password'] ?? '');
-    $mode     = trim($_POST['mode'] ?? 'user');
+    $portal   = trim($_POST['portal']   ?? 'community');
     $ip       = $_SERVER['HTTP_CLIENT_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
     $device   = $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown';
 
-    // ── Auto-migrate verification columns if not present ─────────────────────
-    $db = $conn->query("SELECT DATABASE()")->fetch_row()[0];
-    $existingCols = [];
-    $colRes = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-                            WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users'");
-    while ($r = $colRes->fetch_row()) $existingCols[] = $r[0];
-    if (!in_array('email_verified', $existingCols)) {
-        $conn->query("ALTER TABLE users ADD COLUMN email_verified TINYINT(1) NOT NULL DEFAULT 0 AFTER role");
-        $conn->query("ALTER TABLE users ADD COLUMN verification_token VARCHAR(64) DEFAULT NULL AFTER email_verified");
-        $conn->query("ALTER TABLE users ADD COLUMN token_expires_at DATETIME DEFAULT NULL AFTER verification_token");
-        $conn->query("ALTER TABLE users ADD COLUMN reset_token VARCHAR(64) DEFAULT NULL AFTER token_expires_at");
-        $conn->query("ALTER TABLE users ADD COLUMN reset_token_expires DATETIME DEFAULT NULL AFTER reset_token");
-        $conn->query("UPDATE users SET email_verified=1 WHERE created_at < NOW()");
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    if (empty($email)) {
-        echo json_encode(['status' => 'error', 'message' => 'All fields are required.']); exit;
-    }
-    if ($mode !== 'resend_verification' && empty($password)) {
-        echo json_encode(['status' => 'error', 'message' => 'All fields are required.']); exit;
-    }
-
-    // Hardcoded admin credentials
-    if ($mode === 'admin' && $email === 'admin' && $password === 'admin') {
-        session_regenerate_id(true);
-        $_SESSION['user_id']    = 0;
-        $_SESSION['first_name'] = 'Admin';
-        $_SESSION['last_name']  = '';
-        $_SESSION['role']       = 'admin';
-        echo json_encode(['status' => 'success', 'message' => 'Welcome, Admin!', 'redirect' => 'admin.php']);
-        exit;
-    }
-
-    $response    = ['status' => 'error', 'message' => 'Invalid credentials.'];
-    $log_status  = 'Failed';
-    $log_user_id = null;
-
-    // ── Resend verification mode ─────────────────────────────────────────────
-    if ($mode === 'resend_verification') {
-        $stmt = $conn->prepare(
-            "SELECT id, first_name, email_verified FROM users WHERE email = ? LIMIT 1"
-        );
-        $stmt->bind_param("s", $email);
-        $stmt->execute();
-        $res  = $stmt->get_result();
-        $user = $res->fetch_assoc();
-        $stmt->close();
-        if ($user && !$user['email_verified']) {
-            $newToken  = bin2hex(random_bytes(32));
-            $expiresAt = date('Y-m-d H:i:s', strtotime('+24 hours'));
-            $upd = $conn->prepare(
-                "UPDATE users SET verification_token=?, token_expires_at=? WHERE id=?"
-            );
-            $upd->bind_param("ssi", $newToken, $expiresAt, $user['id']);
-            $upd->execute(); $upd->close();
-            try {
-                require_once __DIR__ . '/core/SenTriMailer.php';
-                sendVerificationEmail($email, $user['first_name'], $newToken);
-            } catch (Throwable $e) { error_log('SenTri resend: ' . $e->getMessage()); }
+    if ($action === 'verify_otp') {
+        $otp_code = trim($_POST['otp'] ?? '');
+        $pending  = $_SESSION['otp_login'] ?? null;
+        if (!$pending || empty($pending['email']) || empty($pending['code']) || empty($pending['expires_at'])) {
+            echo json_encode(['status' => 'error', 'message' => 'No OTP session found. Please sign in again.']);
+            exit;
         }
-        echo json_encode(['status'=>'success','message'=>'If that account exists and is unverified, a new link has been sent. Please check your inbox.']);
+        if ($pending['email'] !== $email) {
+            echo json_encode(['status' => 'error', 'message' => 'OTP email mismatch. Please use the same email.']);
+            exit;
+        }
+        if (new DateTime() > new DateTime($pending['expires_at'])) {
+            unset($_SESSION['otp_login']);
+            echo json_encode(['status' => 'error', 'message' => 'OTP expired. Please sign in again.']);
+            exit;
+        }
+        if ($otp_code !== $pending['code']) {
+            echo json_encode(['status' => 'error', 'message' => 'Invalid OTP. Please try again.']);
+            exit;
+        }
+
+        $stmt = $conn->prepare("SELECT id, first_name, last_name, role, email_verified, is_approved FROM users WHERE id = ? LIMIT 1");
+        $stmt->bind_param("i", $pending['user_id']);
+        $stmt->execute();
+        $user = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+
+        if (!$user) {
+            unset($_SESSION['otp_login']);
+            echo json_encode(['status' => 'error', 'message' => 'User not found.']);
+            exit;
+        }
+
+        $stmt = $conn->prepare("INSERT INTO login_logs(user_id,email,ip_address,device,status) VALUES (?,?,?,?,?)");
+        $successStatus = 'Success';
+        $stmt->bind_param("issss", $user['id'], $email, $ip, $device, $successStatus);
+        $stmt->execute();
+        $stmt->close();
+
+        session_regenerate_id(true);
+        $_SESSION = [
+            'user_id'    => $user['id'],
+            'first_name' => htmlspecialchars($user['first_name'], ENT_QUOTES, 'UTF-8'),
+            'last_name'  => htmlspecialchars($user['last_name'], ENT_QUOTES, 'UTF-8'),
+            'role'       => $user['role'],
+            'is_approved'=> (bool)$user['is_approved'],
+        ];
+        unset($_SESSION['otp_login']);
+
+        echo json_encode(['status' => 'success', 'redirect' => portal_url($user['role']), 'message' => 'OTP verified. Signing in...']);
         exit;
     }
 
-    $stmt = $conn->prepare("SELECT id, first_name, last_name, password, role, email_verified FROM users WHERE email = ? LIMIT 1");
-    if (!$stmt) { echo json_encode(['status'=>'error','message'=>'Database error. Please try again.']); exit; }
-    $stmt->bind_param("s", $email);
-    $stmt->execute();
-    $stmt->store_result();
+    $db = $conn->query("SELECT DATABASE()")->fetch_row()[0];
+    $cols = [];
+    $cr = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users'");
+    while ($r = $cr->fetch_row()) $cols[] = $r[0];
+    $migrations = [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified TINYINT(1) NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token VARCHAR(64) DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS token_expires_at DATETIME DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(64) DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires DATETIME DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_approved TINYINT(1) NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(30) DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS org_name VARCHAR(255) DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS `position` VARCHAR(150) DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS barangay_name VARCHAR(150) DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS municipality VARCHAR(150) DEFAULT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS responder_type VARCHAR(30) DEFAULT NULL",
+    ];
+    foreach ($migrations as $q) $conn->query($q);
+    if (!in_array('email_verified',$cols)) $conn->query("UPDATE users SET email_verified=1 WHERE created_at < NOW()");
+    if (!in_array('is_approved',$cols)) { $conn->query("UPDATE users SET is_approved=1 WHERE role='community' OR role='user' OR role='admin'"); }
+    $enumRes = $conn->query("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db' AND TABLE_NAME='users' AND COLUMN_NAME='role'");
+    if ($enumRes) { $enumRow=$enumRes->fetch_row(); if($enumRow && strpos($enumRow[0],'first_responder')===false) $conn->query("ALTER TABLE users MODIFY COLUMN role ENUM('user','community','barangay','lgu','first_responder','admin') NOT NULL DEFAULT 'community'"); }
+
+    if ($portal === 'resend') {
+        $stmt = $conn->prepare("SELECT id,first_name,email_verified FROM users WHERE email=? LIMIT 1");
+        $stmt->bind_param("s",$email); $stmt->execute();
+        $user = $stmt->get_result()->fetch_assoc(); $stmt->close();
+        if ($user && !$user['email_verified']) {
+            $tok = bin2hex(random_bytes(32)); $exp = date('Y-m-d H:i:s', strtotime('+24 hours'));
+            $u = $conn->prepare("UPDATE users SET verification_token=?,token_expires_at=? WHERE id=?");
+            $u->bind_param("ssi",$tok,$exp,$user['id']); $u->execute(); $u->close();
+            try { require_once __DIR__.'/core/SenTriMailer.php'; sendVerificationEmail($email,$user['first_name'],$tok); } catch(Throwable $e){ error_log($e->getMessage()); }
+        }
+        echo json_encode(['status'=>'success','message'=>'If that account exists and is unverified, a new link has been sent.']); exit;
+    }
+
+    if (empty($email)||empty($password)) { echo json_encode(['status'=>'error','message'=>'All fields are required.']); exit; }
+
+    if ($portal==='admin' && $email==='admin' && $password==='admin') {
+        session_regenerate_id(true);
+        $_SESSION = ['user_id'=>0,'first_name'=>'Admin','last_name'=>'','role'=>'admin','is_approved'=>true];
+        echo json_encode(['status'=>'success','redirect'=>'/admin.php']); exit;
+    }
+
+    if (isLockedOut($conn, $email)) {
+        echo json_encode(['status'=>'error','message'=>'Too many failed attempts. Please wait 30 seconds before trying again.','lockout'=>true]);
+        exit;
+    }
+
+    $stmt = $conn->prepare("SELECT id,first_name,last_name,password,role,email_verified,is_approved FROM users WHERE email=? LIMIT 1");
+    $stmt->bind_param("s",$email); $stmt->execute(); $stmt->store_result();
+    $log_status='Failed'; $log_uid=null; $resp=['status'=>'error','message'=>'Invalid credentials.'];
+    $is_successful_login = false;
 
     if ($stmt->num_rows > 0) {
-        $stmt->bind_result($id, $first_name, $last_name, $hashed, $role, $email_verified);
+        $stmt->bind_result($id,$fn,$ln,$hash,$role,$verified,$approved);
         $stmt->fetch();
-        if (password_verify($password, $hashed)) {
-            if (!$email_verified) {
-                echo json_encode([
-                    'status'      => 'error',
-                    'message'     => 'Please verify your email address before signing in. Check your inbox or resend below.',
-                    'unverified'  => true,
-                    'email'       => $email,
-                ]);
-                $log = $conn->prepare("INSERT INTO login_logs (user_id, email, ip_address, device, status) VALUES (?, ?, ?, ?, ?)");
-                $log_s = 'Failed';
-                $log->bind_param("issss", $id, $email, $ip, $device, $log_s);
-                $log->execute(); $log->close();
+        if (password_verify($password,$hash)) {
+            $community_roles = ['community', 'user'];
+            if (!$verified && in_array($role, $community_roles, true)) {
+                $stmt->close();
+                $lg=$conn->prepare("INSERT INTO login_logs(user_id,email,ip_address,device,status)VALUES(?,?,?,?,?)");
+                $s='Failed'; $lg->bind_param("issss",$id,$email,$ip,$device,$s); $lg->execute(); $lg->close();
+                echo json_encode(['status'=>'error','message'=>'Please verify your email before signing in.','unverified'=>true,'email'=>$email]); exit;
+            }
+            switch($portal) {
+                case 'barangay':        $allowed=['barangay']; break;
+                case 'lgu':             $allowed=['lgu']; break;
+                case 'first_responder': $allowed=['first_responder']; break;
+                case 'admin':           $allowed=['admin']; break;
+                default:                $allowed=['community','user']; break;
+            }
+            if (!in_array($role,$allowed,true)) {
+                echo json_encode(['status'=>'error','message'=>'This account does not have access to the selected portal. Choose the correct portal for your role.']); exit;
+            }
+            if (!$approved && !in_array($role,['community','user','admin'])) {
+                echo json_encode(['status'=>'error','message'=>'Your account is pending administrator approval. You will be notified once approved.','pending'=>true]); exit;
+            }
+            if ($portal === 'community') {
+                $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+                $_SESSION['otp_login'] = [
+                    'user_id'    => $id,
+                    'email'      => $email,
+                    'code'       => $otp,
+                    'expires_at' => date('Y-m-d H:i:s', strtotime('+10 minutes')),
+                    'portal'     => 'community',
+                ];
+                if (!sendLoginOtpEmail($email, $fn, $otp)) {
+                    unset($_SESSION['otp_login']);
+                    echo json_encode(['status' => 'error', 'message' => 'Unable to send OTP email. Please try again later.']);
+                    exit;
+                }
+                echo json_encode(['status' => 'otp_required', 'message' => 'A 6-digit login code was sent to your email. Enter it below to continue.', 'email' => $email]);
                 exit;
             }
             session_regenerate_id(true);
-            $_SESSION['user_id']    = $id;
-            $_SESSION['first_name'] = htmlspecialchars($first_name, ENT_QUOTES, 'UTF-8');
-            $_SESSION['last_name']  = htmlspecialchars($last_name, ENT_QUOTES, 'UTF-8');
-            $_SESSION['role']       = $role;
-            $log_status  = 'Success';
-            $log_user_id = $id;
-            $redirect = ($role === 'admin') ? 'admin.php' : 'dashboard.php';
-            $response = ['status' => 'success', 'message' => 'Welcome back, ' . htmlspecialchars($first_name) . '!', 'redirect' => $redirect];
+            $_SESSION = ['user_id'=>$id,'first_name'=>htmlspecialchars($fn,ENT_QUOTES,'UTF-8'),'last_name'=>htmlspecialchars($ln,ENT_QUOTES,'UTF-8'),'role'=>$role,'is_approved'=>(bool)$approved];
+            $log_status='Success'; $log_uid=$id;
+            $is_successful_login = true;
+            require_once __DIR__.'/config/auth.php';
+            $resp=['status'=>'success','redirect'=>portal_url($role),'message'=>'Welcome, '.htmlspecialchars($fn).'!'];
         }
     }
     $stmt->close();
 
-    $log = $conn->prepare("INSERT INTO login_logs (user_id, email, ip_address, device, status) VALUES (?, ?, ?, ?, ?)");
-    $log->bind_param("issss", $log_user_id, $email, $ip, $device, $log_status);
-    $log->execute();
-    $log->close();
+    $lg=$conn->prepare("INSERT INTO login_logs(user_id,email,ip_address,device,status)VALUES(?,?,?,?,?)");
+    $lg->bind_param("issss",$log_uid,$email,$ip,$device,$log_status); $lg->execute(); $lg->close();
 
-    echo json_encode($response);
-    exit;
+    if (!$is_successful_login) {
+        $lockout = flagHighRiskAttempt($conn, $email);
+        if ($lockout) {
+            $resp = ['status'=>'error','message'=>'Too many failed attempts. Please wait 30 seconds before trying again.','lockout'=>true];
+        }
+    }
+
+    echo json_encode($resp); exit;
 }
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Login – SenTri</title>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Sign In — SenTri Incident Reporting System</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <style>
-:root {
-  --blue:#1c57b2;--blue-dark:#0e3d8c;--blue-light:#3a8dff;
-  --admin:#7c3aed;--admin-light:#a78bfa;--admin-dark:#5b21b6;
-  --text:#1a1a2e;--muted:#666;
-  --danger:#dc2626;--danger-light:#fee2e2;--danger-border:#fca5a5;
-  --warning:#d97706;--warning-light:#fef3c7;--warning-border:#fcd34d;
-}
-*{box-sizing:border-box;margin:0;padding:0;font-family:'Poppins',sans-serif;}
-body{background:#0a0f1e;min-height:100vh;display:flex;position:relative;overflow:hidden;}
-
-.bg-canvas{position:fixed;inset:0;z-index:0;overflow:hidden;}
-.bg-canvas::before{content:'';position:absolute;width:600px;height:600px;background:radial-gradient(circle,rgba(58,141,255,0.15) 0%,transparent 70%);top:-200px;left:-100px;animation:drift1 8s ease-in-out infinite alternate;}
-.bg-canvas::after{content:'';position:absolute;width:500px;height:500px;background:radial-gradient(circle,rgba(124,58,237,0.12) 0%,transparent 70%);bottom:-150px;right:-100px;animation:drift2 10s ease-in-out infinite alternate;}
-.orb{position:absolute;border-radius:50%;filter:blur(60px);animation:drift3 12s ease-in-out infinite;}
-.orb-1{width:300px;height:300px;background:rgba(58,141,255,0.08);top:30%;left:20%;animation-delay:-4s;}
-.orb-2{width:200px;height:200px;background:rgba(124,58,237,0.1);top:60%;left:60%;animation-delay:-8s;}
-.particle{position:absolute;border-radius:50%;animation:float linear infinite;}
-@keyframes drift1{from{transform:translate(0,0) scale(1);}to{transform:translate(40px,30px) scale(1.1);}}
-@keyframes drift2{from{transform:translate(0,0) scale(1);}to{transform:translate(-30px,-40px) scale(1.15);}}
-@keyframes drift3{0%,100%{transform:translate(0,0);}50%{transform:translate(20px,-20px);}}
-@keyframes float{0%{transform:translateY(100vh) scale(0);opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{transform:translateY(-100px) scale(1);opacity:0;}}
-@keyframes slideInLeft{from{opacity:0;transform:translateX(-40px);}to{opacity:1;transform:translateX(0);}}
-@keyframes slideInRight{from{opacity:0;transform:translateX(40px);}to{opacity:1;transform:translateX(0);}}
-@keyframes fadeInUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);}}
-@keyframes fadeInForm{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
-@keyframes pulse-icon{0%,100%{box-shadow:0 8px 24px rgba(58,141,255,0.4);}50%{box-shadow:0 8px 36px rgba(58,141,255,0.75);}}
-@keyframes shake{0%,100%{transform:translateX(0);}20%{transform:translateX(-8px);}40%{transform:translateX(8px);}60%{transform:translateX(-6px);}80%{transform:translateX(6px);}}
-@keyframes lockIn{from{opacity:0;transform:scale(0.92);}to{opacity:1;transform:scale(1);}}
-@keyframes drainBar{from{width:100%;}to{width:0%;}}
-
-.left{flex:1.1;display:flex;flex-direction:column;justify-content:center;padding:60px 56px;position:relative;z-index:1;animation:slideInLeft 0.7s cubic-bezier(0.22,1,0.36,1) both;}
-.brand{display:flex;align-items:center;gap:12px;margin-bottom:48px;text-decoration:none;}
-.brand-icon{width:48px;height:48px;background:linear-gradient(135deg,var(--blue-light),var(--blue));border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:1.4rem;color:#fff;animation:pulse-icon 3s ease-in-out infinite;}
-.brand-name{font-size:1.5rem;font-weight:800;color:#fff;letter-spacing:-0.5px;}
-.left h1{font-size:2.8rem;font-weight:800;color:#fff;line-height:1.15;margin-bottom:20px;letter-spacing:-1px;}
-.left h1 .accent{color:var(--blue-light);}
-.left p{font-size:1rem;color:rgba(255,255,255,0.65);line-height:1.8;max-width:360px;margin-bottom:36px;}
-.features{display:flex;flex-direction:column;gap:16px;}
-.feature{display:flex;align-items:center;gap:14px;animation:fadeInUp 0.6s both;}
-.feature:nth-child(1){animation-delay:0.3s;}
-.feature:nth-child(2){animation-delay:0.45s;}
-.feature:nth-child(3){animation-delay:0.6s;}
-.feat-icon{width:40px;height:40px;background:rgba(255,255,255,0.1);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1rem;color:var(--blue-light);flex-shrink:0;border:1px solid rgba(255,255,255,0.1);}
-.feat-text{font-size:0.88rem;color:rgba(255,255,255,0.75);font-weight:500;}
-
-.right{flex:1;background:#fff;display:flex;flex-direction:column;justify-content:center;padding:50px 56px;overflow-y:auto;position:relative;z-index:1;animation:slideInRight 0.7s cubic-bezier(0.22,1,0.36,1) both;border-radius:28px 0 0 28px;box-shadow:-20px 0 60px rgba(0,0,0,0.3);}
-.back{font-size:0.83rem;color:var(--blue);text-decoration:none;font-weight:600;margin-bottom:24px;display:inline-flex;align-items:center;gap:6px;transition:gap 0.2s;}
-.back:hover{gap:10px;}
-
-.login-tabs{display:flex;margin-bottom:28px;background:#f0f2f7;border-radius:12px;padding:4px;}
-.tab-btn{flex:1;padding:10px 16px;border:none;background:transparent;border-radius:9px;font-size:0.88rem;font-weight:600;cursor:pointer;transition:all 0.25s;color:var(--muted);font-family:'Poppins',sans-serif;display:flex;align-items:center;justify-content:center;gap:7px;}
-.tab-btn.active-user{background:#fff;color:var(--blue);box-shadow:0 2px 8px rgba(0,0,0,0.1);}
-.tab-btn.active-admin{background:var(--admin);color:#fff;box-shadow:0 2px 12px rgba(124,58,237,0.45);}
-.tab-btn i{font-size:0.9rem;}
-
-.form-section{display:none;animation:fadeInForm 0.35s ease both;}
-.form-section.active{display:block;}
-.section-title{font-size:1.5rem;font-weight:800;color:var(--text);margin-bottom:4px;letter-spacing:-0.5px;}
-.section-sub{font-size:0.88rem;color:var(--muted);margin-bottom:24px;}
-
-.admin-header{background:linear-gradient(135deg,#f5f3ff,#ede9fe);border:1px solid #ddd6fe;border-radius:12px;padding:16px 18px;display:flex;align-items:center;gap:12px;margin-bottom:22px;}
-.admin-shield{width:42px;height:42px;background:var(--admin);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.1rem;box-shadow:0 4px 12px rgba(124,58,237,0.35);}
-.admin-header h4{font-size:0.92rem;font-weight:700;color:var(--admin-dark);}
-.admin-header p{font-size:0.78rem;color:#7c3aed88;}
-
-.form-group{margin-bottom:16px;position:relative;}
-.form-group label{display:block;font-size:0.82rem;font-weight:600;color:#444;margin-bottom:6px;}
-.form-group input{width:100%;padding:12px 16px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:0.93rem;transition:all 0.2s;outline:none;font-family:'Poppins',sans-serif;background:#fafafa;}
-.form-group input:focus{border-color:var(--blue-light);background:#fff;box-shadow:0 0 0 4px rgba(58,141,255,0.1);}
-.admin-mode .form-group input:focus{border-color:var(--admin-light);box-shadow:0 0 0 4px rgba(124,58,237,0.1);}
-.form-group input.input-error{border-color:var(--danger-border);background:#fff5f5;}
-.show-btn{position:absolute;right:13px;bottom:12px;font-size:0.72rem;color:var(--blue);cursor:pointer;font-weight:700;user-select:none;letter-spacing:0.5px;}
-.forgot{text-align:right;margin-top:-8px;margin-bottom:18px;}
-.forgot a{font-size:0.82rem;color:var(--blue);text-decoration:none;font-weight:600;}
-.forgot a:hover{text-decoration:underline;}
-
-/* ── Attempt counter badge ── */
-.attempt-badge{display:none;align-items:center;gap:8px;background:var(--warning-light);border:1px solid var(--warning-border);border-radius:8px;padding:9px 13px;margin-bottom:14px;font-size:0.82rem;font-weight:600;color:var(--warning);animation:fadeInUp 0.3s ease both;}
-.attempt-badge.last-attempt{background:var(--danger-light);border-color:var(--danger-border);color:var(--danger);}
-.attempt-badge i{font-size:0.9rem;flex-shrink:0;}
-.attempt-dots{display:flex;gap:5px;margin-left:auto;}
-.attempt-dot{width:10px;height:10px;border-radius:50%;background:currentColor;opacity:0.25;transition:opacity 0.3s;}
-.attempt-dot.used{opacity:1;}
-
-/* ── Lockout overlay ── */
-.lockout-box{display:none;animation:lockIn 0.4s cubic-bezier(0.34,1.56,0.64,1) both;}
-.lockout-box.active{display:block;}
-.lockout-inner{background:linear-gradient(135deg,#fff5f5,#fee2e2);border:1.5px solid var(--danger-border);border-radius:14px;padding:22px 20px;text-align:center;}
-.lockout-icon{width:52px;height:52px;background:var(--danger);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:1.4rem;color:#fff;margin:0 auto 14px;box-shadow:0 4px 16px rgba(220,38,38,0.35);}
-.lockout-title{font-size:1rem;font-weight:800;color:var(--danger);margin-bottom:4px;}
-.lockout-sub{font-size:0.82rem;color:#b91c1c;margin-bottom:16px;line-height:1.5;}
-.lockout-timer-label{font-size:0.78rem;font-weight:700;color:#991b1b;margin-bottom:8px;letter-spacing:0.5px;text-transform:uppercase;}
-.lockout-countdown{font-size:2.2rem;font-weight:800;color:var(--danger);line-height:1;margin-bottom:14px;font-variant-numeric:tabular-nums;}
-.lockout-bar-track{background:#fca5a5;border-radius:99px;height:6px;overflow:hidden;}
-.lockout-bar-fill{height:100%;border-radius:99px;background:var(--danger);transition:none;}
-
-.btn-primary{width:100%;background:linear-gradient(135deg,var(--blue-light),var(--blue));color:#fff;border:none;padding:13px;border-radius:10px;font-size:0.96rem;font-weight:700;cursor:pointer;transition:all 0.25s;font-family:'Poppins',sans-serif;position:relative;overflow:hidden;}
-.btn-primary:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 24px rgba(28,87,178,0.4);}
-.btn-primary:active:not(:disabled){transform:translateY(0);}
-.btn-primary:disabled{opacity:0.5;cursor:not-allowed;transform:none !important;}
-.btn-admin{background:linear-gradient(135deg,var(--admin-light),var(--admin));}
-.btn-admin:hover:not(:disabled){box-shadow:0 8px 24px rgba(124,58,237,0.45);}
-.btn-primary.shake{animation:shake 0.5s cubic-bezier(0.36,0.07,0.19,0.97);}
-
-.signup-link{text-align:center;margin-top:18px;font-size:0.86rem;color:var(--muted);}
-.signup-link a{color:var(--blue);font-weight:700;text-decoration:none;}
-.signup-link a:hover{text-decoration:underline;}
-.msg{padding:11px 16px;border-radius:9px;font-size:0.86rem;margin-bottom:14px;display:none;text-align:center;font-weight:500;}
-.msg.success{background:#e8f5e9;color:#2e7d32;}
-.msg.error{background:#ffebee;color:#c62828;}
-
-.notice-banner{padding:12px 16px;border-radius:10px;font-size:0.84rem;margin-bottom:20px;display:flex;align-items:flex-start;gap:10px;font-weight:500;line-height:1.5;}
-.notice-banner.info{background:#e3f2fd;color:#1565c0;border:1px solid #bbdefb;}
-.notice-banner.success{background:#e8f5e9;color:#2e7d32;border:1px solid #c8e6c9;}
-.notice-banner i{margin-top:1px;flex-shrink:0;}
-.resend-block{background:#fff8e1;border:1px solid #ffe082;border-radius:10px;padding:14px 16px;margin-top:12px;display:none;}
-.resend-block p{font-size:0.82rem;color:#795548;margin-bottom:10px;line-height:1.5;}
-.resend-block input{width:100%;padding:9px 13px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:0.88rem;outline:none;font-family:'Poppins',sans-serif;margin-bottom:8px;}
-.resend-block input:focus{border-color:var(--blue-light);}
-.btn-resend{width:100%;background:var(--blue);color:#fff;border:none;padding:9px;border-radius:8px;font-size:0.85rem;font-weight:700;cursor:pointer;font-family:'Poppins',sans-serif;}
-.btn-resend:disabled{opacity:0.6;cursor:not-allowed;}
-
-@media(max-width:900px){
-  body{flex-direction:column;overflow:auto;background:#0a0f1e;}
-  .bg-canvas{display:none;}
-  .left{padding:36px 28px 28px;animation:none;background:linear-gradient(160deg,#1c57b2,#3a8dff);}
-  .left h1{font-size:1.9rem;}
-  .left p,.features{display:none;}
-  .right{border-radius:24px 24px 0 0;padding:36px 24px 48px;animation:none;box-shadow:none;flex:none;min-height:62vh;}
-}
-@media(max-width:480px){
-  .left{padding:28px 20px 24px;}
-  .right{padding:32px 20px 40px;}
-  .section-title{font-size:1.3rem;}
-  .tab-btn{font-size:0.82rem;padding:9px 10px;}
-}
+:root{--navy:#0a3d62;--navy-dark:#062444;--navy-light:#1a5276;--gold:#f39c12;--gold-dark:#d68910;--green:#166534;--green-light:#16a34a;--red:#b91c1c;--purple:#5b21b6;--purple-light:#7c3aed;--text:#1a1a2e;--muted:#6b7280;--border:#e5e7eb;}
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
+body{min-height:100vh;background:var(--navy-dark);display:flex;flex-direction:column;}
+.gov-bar{background:#fff;border-bottom:4px solid var(--gold);padding:0 32px;display:flex;align-items:center;justify-content:space-between;height:64px;box-shadow:0 2px 12px rgba(0,0,0,0.15);}
+.gov-brand{display:flex;align-items:center;gap:14px;text-decoration:none;}
+.gov-seal{width:44px;height:44px;background:linear-gradient(135deg,var(--navy),var(--navy-light));border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.2rem;color:var(--gold);border:2px solid var(--gold);}
+.gov-text h1{font-family:'Poppins',sans-serif;font-size:1.15rem;font-weight:800;color:var(--navy);}
+.gov-text p{font-size:0.72rem;color:var(--muted);font-weight:500;}
+.gov-links{display:flex;gap:20px;}
+.gov-links a{font-size:0.82rem;color:var(--navy);text-decoration:none;font-weight:600;opacity:0.8;}
+.gov-links a:hover{opacity:1;color:var(--gold-dark);}
+.hero{background:linear-gradient(135deg,var(--navy-dark) 0%,var(--navy) 60%,#1a5276 100%);padding:36px 32px 0;position:relative;overflow:visible;}
+.hero::before{content:'';position:absolute;inset:0;background:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");}
+.hero-inner{max-width:980px;margin:0 auto;display:flex;align-items:center;gap:40px;position:relative;z-index:1;}
+.hero-eyebrow{font-size:0.73rem;font-weight:700;color:var(--gold);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;}
+.hero-inner h2{font-family:'Poppins',sans-serif;font-size:1.9rem;font-weight:800;color:#fff;line-height:1.2;margin-bottom:8px;}
+.hero-inner h2 span{color:var(--gold);}
+.hero-inner p{font-size:0.88rem;color:rgba(255,255,255,0.68);line-height:1.7;max-width:420px;}
+.hero-stats{display:flex;gap:28px;margin-top:20px;}
+.stat-num{font-family:'Poppins',sans-serif;font-size:1.5rem;font-weight:800;color:var(--gold);}
+.stat-lbl{font-size:0.7rem;color:rgba(255,255,255,0.55);font-weight:600;text-transform:uppercase;letter-spacing:1px;}
+.hero-badge{background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:22px;flex-shrink:0;text-align:center;min-width:140px;margin-left:auto;}
+.hero-badge i{font-size:2.5rem;color:var(--gold);display:block;margin-bottom:8px;}
+.hero-badge span{font-size:0.73rem;color:rgba(255,255,255,0.65);font-weight:600;text-transform:uppercase;letter-spacing:1px;}
+.portal-section{max-width:980px;margin:0 auto;padding:24px 32px 0;position:relative;z-index:1;}
+.portal-lbl{font-size:0.72rem;font-weight:700;color:var(--gold);letter-spacing:2px;text-transform:uppercase;text-align:center;margin-bottom:14px;}
+.portal-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;transform:translateY(26px);}
+.portal-card{background:#fff;border-radius:14px;padding:16px 10px;text-align:center;cursor:pointer;border:2.5px solid transparent;transition:all 0.2s;box-shadow:0 4px 20px rgba(0,0,0,0.18);}
+.portal-card:hover{transform:translateY(-4px);box-shadow:0 10px 30px rgba(0,0,0,0.25);}
+.portal-card.selected{box-shadow:0 8px 28px rgba(243,156,18,0.3);}
+.p-community.selected{border-color:#2563eb;}.p-barangay.selected{border-color:#166534;}.p-lgu.selected{border-color:#0a3d62;}.p-responder.selected{border-color:#b91c1c;}.p-admin.selected{border-color:#5b21b6;}
+.portal-icon{width:46px;height:46px;border-radius:11px;display:flex;align-items:center;justify-content:center;margin:0 auto 9px;font-size:1.2rem;}
+.p-community .portal-icon{background:#eff6ff;color:#2563eb;}.p-barangay .portal-icon{background:#f0fdf4;color:#166534;}.p-lgu .portal-icon{background:#f0f7ff;color:#0a3d62;}.p-responder .portal-icon{background:#fef2f2;color:#b91c1c;}.p-admin .portal-icon{background:#f5f3ff;color:#5b21b6;}
+.portal-name{font-size:0.76rem;font-weight:700;color:#1a1a2e;line-height:1.3;}
+.portal-sub{font-size:0.66rem;color:#6b7280;margin-top:2px;}
+.form-wrap{max-width:980px;margin:0 auto;padding:0 32px 48px;}
+.form-card{background:#fff;border-radius:20px;padding:56px 42px 38px;margin-top:48px;box-shadow:0 8px 40px rgba(0,0,0,0.2);}
+.portal-header{display:flex;align-items:center;gap:14px;margin-bottom:26px;padding-bottom:18px;border-bottom:2px solid #e5e7eb;}
+.ph-icon{width:50px;height:50px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:1.3rem;flex-shrink:0;}
+.ph-title{font-size:1.1rem;font-weight:800;color:#1a1a2e;}
+.ph-sub{font-size:0.81rem;color:#6b7280;margin-top:2px;}
+.official-notice{background:#fef9ec;border:1px solid #fde68a;border-radius:10px;padding:12px 15px;font-size:0.81rem;color:#92400e;display:none;align-items:flex-start;gap:9px;margin-bottom:20px;line-height:1.5;}
+.official-notice i{margin-top:2px;color:#d97706;flex-shrink:0;}
+.form-group{margin-bottom:15px;}
+.form-group label{display:block;font-size:0.8rem;font-weight:600;color:#374151;margin-bottom:5px;}
+.form-group input{width:100%;padding:11px 13px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:0.9rem;font-family:'Inter',sans-serif;outline:none;background:#fafafa;transition:all 0.18s;color:#1a1a2e;}
+.form-group input:focus{border-color:#93c5fd;background:#fff;box-shadow:0 0 0 3px rgba(59,130,246,0.09);}
+.pw-wrap{position:relative;}
+.pw-wrap .toggle-pw{position:absolute;right:11px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#6b7280;font-size:0.78rem;font-weight:700;font-family:'Inter',sans-serif;}
+.forgot-row{display:flex;justify-content:flex-end;margin-top:-8px;margin-bottom:16px;}
+.forgot-row a{font-size:0.79rem;color:#2563eb;text-decoration:none;font-weight:600;}
+.btn-login{width:100%;padding:12px;border:none;border-radius:11px;font-size:0.94rem;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;transition:all 0.2s;color:#fff;display:flex;align-items:center;justify-content:center;gap:8px;}
+.btn-login:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,0,0,0.25);}
+.btn-login:disabled{opacity:0.6;cursor:not-allowed;background:#9ca3af;}
+.msg{padding:10px 14px;border-radius:9px;font-size:0.83rem;font-weight:500;margin-bottom:14px;display:none;text-align:center;}
+.msg.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
+.msg.success{background:#f0fdf4;color:#14532d;border:1px solid #bbf7d0;}
+.signup-row{text-align:center;margin-top:14px;font-size:0.84rem;color:#6b7280;}
+.signup-row a{color:#2563eb;font-weight:700;text-decoration:none;}
+.resend-box{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:13px;margin-top:10px;display:none;}
+.resend-box p{font-size:0.8rem;color:#92400e;margin-bottom:9px;line-height:1.5;}
+.resend-box input{width:100%;padding:9px 12px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:0.86rem;outline:none;font-family:'Inter',sans-serif;margin-bottom:7px;}
+.btn-resend{width:100%;background:#d97706;color:#fff;border:none;padding:9px;border-radius:8px;font-size:0.83rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;}
+.page-notice{max-width:980px;margin:14px auto 0;padding:0 32px;}
+.notice{padding:12px 15px;border-radius:10px;font-size:0.83rem;font-weight:500;display:flex;align-items:flex-start;gap:9px;line-height:1.5;}
+.notice.info{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;}
+.notice.success{background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;}
+.site-footer{background:var(--navy-dark);border-top:1px solid rgba(255,255,255,0.07);padding:20px 32px;text-align:center;margin-top:auto;}
+.site-footer p{font-size:0.76rem;color:rgba(255,255,255,0.35);}
+@media(max-width:840px){.portal-grid{grid-template-columns:repeat(3,1fr);}.hero-badge{display:none;}.gov-links{display:none;}.form-card{padding:26px 20px;}.form-wrap{padding:0 20px 40px;}.portal-section{padding:20px 20px 0;}}
+@media(max-width:520px){.portal-grid{grid-template-columns:repeat(2,1fr);}.hero-inner h2{font-size:1.4rem;}.hero-stats{gap:16px;}}
 </style>
 </head>
 <body>
-
-<div class="bg-canvas">
-  <div id="particles" style="position:absolute;inset:0;overflow:hidden;"></div>
-  <div class="orb orb-1"></div>
-  <div class="orb orb-2"></div>
-</div>
-
-<div class="left">
-  <a href="index.php" class="brand">
-    <div class="brand-icon"><i class="fas fa-shield-halved"></i></div>
-    <span class="brand-name">SenTri</span>
+<!-- Your HTML remains the same -->
+<header class="gov-bar">
+  <a href="index.php" class="gov-brand">
+    <div class="gov-seal"><i class="fas fa-shield-halved"></i></div>
+    <div class="gov-text"><h1>SenTri</h1><p>Community Safety Incident Reporting System</p></div>
   </a>
-  <h1>Protect Your <span class="accent">Community.</span><br>Together.</h1>
-  <p>Join thousands reporting safety incidents and helping their neighborhoods stay informed and safe.</p>
-  <div class="features">
-    <div class="feature">
-      <div class="feat-icon"><i class="fas fa-map-location-dot"></i></div>
-      <span class="feat-text">Location-tagged safety alerts in real time</span>
+  <nav class="gov-links">
+    <a href="index.php">Home</a>
+    <a href="signup.php">Register</a>
+    <a href="forgot_password.php">Forgot Password</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <div class="hero-inner">
+    <div>
+      <p class="hero-eyebrow">Official Portal Access</p>
+      <h2>Sign In to <span>SenTri</span></h2>
+      <p>Select your portal and enter your credentials. Each portal is restricted to its designated role.</p>
+      <div class="hero-stats">
+        <div><div class="stat-num">5</div><div class="stat-lbl">Portal Types</div></div>
+        <div><div class="stat-num">24/7</div><div class="stat-lbl">Monitoring</div></div>
+      </div>
     </div>
-    <div class="feature">
-      <div class="feat-icon"><i class="fas fa-users"></i></div>
-      <span class="feat-text">Verified community-sourced reports</span>
+    <div class="hero-badge"><i class="fas fa-shield-halved"></i><span>Secure<br>Gov Portal</span></div>
+  </div>
+  <div class="portal-section">
+    <p class="portal-lbl">Choose Your Portal</p>
+    <div class="portal-grid">
+      <div class="portal-card p-community selected" onclick="selectPortal('community',this)"><div class="portal-icon"><i class="fas fa-users"></i></div><div class="portal-name">Community</div><div class="portal-sub">Citizens</div></div>
+      <div class="portal-card p-barangay" onclick="selectPortal('barangay',this)"><div class="portal-icon"><i class="fas fa-house-flag"></i></div><div class="portal-name">Barangay</div><div class="portal-sub">Officials</div></div>
+      <div class="portal-card p-lgu" onclick="selectPortal('lgu',this)"><div class="portal-icon"><i class="fas fa-landmark"></i></div><div class="portal-name">LGU</div><div class="portal-sub">City / Municipal</div></div>
+      <div class="portal-card p-responder" onclick="selectPortal('first_responder',this)"><div class="portal-icon"><i class="fas fa-truck-medical"></i></div><div class="portal-name">First Responder</div><div class="portal-sub">BFP / PNP / EMS</div></div>
+      <div class="portal-card p-admin" onclick="selectPortal('admin',this)"><div class="portal-icon"><i class="fas fa-gear"></i></div><div class="portal-name">Admin</div><div class="portal-sub">System Access</div></div>
     </div>
-    <div class="feature">
-      <div class="feat-icon"><i class="fas fa-bell"></i></div>
-      <span class="feat-text">Instant area status updates near you</span>
+  </div>
+</section>
+
+<?php if(isset($_GET['verify_sent'])): ?><div class="page-notice"><div class="notice info"><i class="fas fa-envelope"></i><span>Verification link sent. Check your inbox and spam folder.</span></div></div>
+<?php elseif(isset($_GET['reset'])): ?><div class="page-notice"><div class="notice success"><i class="fas fa-circle-check"></i><span>Password reset successfully. You may now sign in.</span></div></div>
+<?php elseif(isset($_GET['pending'])): ?><div class="page-notice"><div class="notice info"><i class="fas fa-clock"></i><span>Your official account is awaiting administrator approval.</span></div></div>
+<?php endif; ?>
+
+<div class="form-wrap">
+  <div class="form-card">
+    <div class="portal-header">
+      <div class="ph-icon" id="phIcon" style="background:#eff6ff;color:#2563eb;"><i class="fas fa-users"></i></div>
+      <div><div class="ph-title" id="phTitle">Community Member Sign In</div><div class="ph-sub" id="phSub">Access the citizen incident reporting dashboard</div></div>
     </div>
+    <div class="official-notice" id="officialNotice"><i class="fas fa-triangle-exclamation"></i><span>This portal requires an approved official account. No email verification is needed — your account is activated directly by the system administrator. To register, <a href="signup.php" style="color:#92400e;font-weight:700;">create an account</a> and await administrator approval.</span></div>
+    <div id="loginMsg" class="msg"></div>
+    <form id="loginForm" novalidate>
+      <input type="hidden" name="portal" id="portalField" value="community">
+      <div class="form-group"><label>Email Address</label><input type="email" name="email" id="emailField" placeholder="you@example.com" required autocomplete="email"></div>
+      <div class="form-group"><label>Password</label><div class="pw-wrap"><input type="password" name="password" id="pwField" placeholder="••••••••" required><button type="button" class="toggle-pw" onclick="togglePw()">SHOW</button></div></div>
+      <div class="forgot-row"><a href="forgot_password.php">Forgot Password?</a></div>
+      <button type="submit" class="btn-login" id="loginBtn" style="background:linear-gradient(135deg,#3b82f6,#2563eb);"><i class="fas fa-right-to-bracket"></i> Sign In to Community Portal</button>
+    </form>
+    <div id="otpSection" style="display:none;">
+      <form id="otpForm" novalidate>
+        <input type="hidden" name="action" value="verify_otp">
+        <input type="hidden" name="email" id="otpEmail" value="">
+        <input type="hidden" name="portal" value="community">
+        <div class="form-group"><label>One-Time Code</label><input type="text" name="otp" id="otpField" placeholder="123456" maxlength="6" pattern="[0-9]*" inputmode="numeric" required></div>
+        <button type="submit" class="btn-login" id="otpSubmitBtn" style="background:linear-gradient(135deg,#3b82f6,#2563eb);"><i class="fas fa-key"></i> Verify OTP</button>
+        <button type="button" class="btn-login" id="otpBackBtn" style="background:#f3f4f6;color:#1f2937;margin-top:10px;"><i class="fas fa-arrow-left"></i> Back to Password</button>
+      </form>
+    </div>
+    <div id="resendBox" class="resend-box">
+      <p><i class="fas fa-envelope-circle-check" style="color:#d97706;margin-right:5px;"></i>Your email is not verified. Enter your email to resend the verification link.</p>
+      <input type="email" id="resendEmail" placeholder="you@example.com">
+      <button class="btn-resend" id="resendBtn" onclick="resend()"><i class="fas fa-paper-plane"></i> Resend Verification Email</button>
+    </div>
+    <div class="signup-row" id="signupRow">Don't have an account? <a href="signup.php">Register here</a></div>
   </div>
 </div>
-
-<div class="right">
-  <a href="index.php" class="back"><i class="fas fa-arrow-left"></i> Back to Home</a>
-
-  <?php if (isset($_GET['verify_sent'])): ?>
-  <div class="notice-banner info"><i class="fas fa-envelope"></i><span>A verification link has been sent to your email address. Please check your inbox (and spam folder) before signing in.</span></div>
-  <?php elseif (isset($_GET['reset'])): ?>
-  <div class="notice-banner success"><i class="fas fa-circle-check"></i><span>Password reset successfully! You can now sign in with your new password.</span></div>
-  <?php endif; ?>
-
-  <div class="login-tabs">
-    <button class="tab-btn active-user" id="tabUser" onclick="switchTab('user')">
-      <i class="fas fa-user"></i> Member Login
-    </button>
-    <button class="tab-btn" id="tabAdmin" onclick="switchTab('admin')">
-      <i class="fas fa-shield-halved"></i> Admin Portal
-    </button>
-  </div>
-
-  <!-- USER LOGIN -->
-  <div class="form-section active" id="userSection">
-    <div class="section-title">Welcome Back</div>
-    <p class="section-sub">Sign in to your SenTri account</p>
-    <div id="userMsg" class="msg"></div>
-
-    <!-- Attempt badge -->
-    <div class="attempt-badge" id="userAttemptBadge">
-      <i class="fas fa-triangle-exclamation"></i>
-      <span id="userAttemptText">2 attempts remaining</span>
-      <div class="attempt-dots">
-        <div class="attempt-dot used" id="userDot1"></div>
-        <div class="attempt-dot used" id="userDot2"></div>
-        <div class="attempt-dot used" id="userDot3"></div>
-      </div>
-    </div>
-
-    <!-- Lockout box -->
-    <div class="lockout-box" id="userLockout">
-      <div class="lockout-inner">
-        <div class="lockout-icon"><i class="fas fa-lock"></i></div>
-        <div class="lockout-title">Account Temporarily Locked</div>
-        <div class="lockout-sub">Too many failed attempts. Please wait before trying again.</div>
-        <div class="lockout-timer-label">Unlocking in</div>
-        <div class="lockout-countdown" id="userCountdown">10</div>
-        <div class="lockout-bar-track">
-          <div class="lockout-bar-fill" id="userBar" style="width:100%;"></div>
-        </div>
-      </div>
-    </div>
-
-    <form id="userForm" novalidate>
-      <input type="hidden" name="mode" value="user">
-      <div class="form-group">
-        <label>Email Address</label>
-        <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email">
-      </div>
-      <div class="form-group">
-        <label>Password</label>
-        <input type="password" id="password" name="password" placeholder="Your password" required>
-        <span class="show-btn" onclick="togglePw('password',this)">SHOW</span>
-      </div>
-      <div class="forgot"><a href="forgot_password.php">Forgot Password?</a></div>
-      <button class="btn-primary" type="submit" id="loginBtn"><i class="fas fa-right-to-bracket"></i> Sign In</button>
-      <div id="resendBlock" class="resend-block">
-        <p><i class="fas fa-envelope-circle-check" style="color:#f59e0b;margin-right:5px;"></i>Your email isn't verified yet. Enter your email and we'll resend the link.</p>
-        <input type="email" id="resendEmailInput" placeholder="you@example.com">
-        <button class="btn-resend" id="resendBtn" type="button" onclick="resendVerification()"><i class="fas fa-paper-plane"></i> Resend Verification Email</button>
-      </div>
-      <div class="signup-link">Don't have an account? <a href="signup.php">Create one</a></div>
-    </form>
-  </div>
-
-  <!-- ADMIN LOGIN -->
-  <div class="form-section admin-mode" id="adminSection">
-    <div class="section-title">Admin Portal</div>
-    <p class="section-sub">Restricted access — authorized personnel only</p>
-    <div class="admin-header">
-      <div class="admin-shield"><i class="fas fa-lock"></i></div>
-      <div>
-        <h4>Moderator / Admin Access</h4>
-        <p>Use your admin credentials to continue</p>
-      </div>
-    </div>
-    <div id="adminMsg" class="msg"></div>
-
-    <!-- Attempt badge -->
-    <div class="attempt-badge" id="adminAttemptBadge">
-      <i class="fas fa-triangle-exclamation"></i>
-      <span id="adminAttemptText">2 attempts remaining</span>
-      <div class="attempt-dots">
-        <div class="attempt-dot used" id="adminDot1"></div>
-        <div class="attempt-dot used" id="adminDot2"></div>
-        <div class="attempt-dot used" id="adminDot3"></div>
-      </div>
-    </div>
-
-    <!-- Lockout box -->
-    <div class="lockout-box" id="adminLockout">
-      <div class="lockout-inner">
-        <div class="lockout-icon"><i class="fas fa-lock"></i></div>
-        <div class="lockout-title">Portal Temporarily Locked</div>
-        <div class="lockout-sub">Too many failed attempts. Please wait before trying again.</div>
-        <div class="lockout-timer-label">Unlocking in</div>
-        <div class="lockout-countdown" id="adminCountdown">10</div>
-        <div class="lockout-bar-track">
-          <div class="lockout-bar-fill" id="adminBar" style="width:100%;"></div>
-        </div>
-      </div>
-    </div>
-
-    <form id="adminForm" novalidate>
-      <input type="hidden" name="mode" value="admin">
-      <div class="form-group">
-        <label>Admin Username / Email</label>
-        <input type="text" id="adminEmail" name="email" placeholder="admin" required>
-      </div>
-      <div class="form-group">
-        <label>Admin Password</label>
-        <input type="password" id="adminPassword" name="password" placeholder="••••••••" required>
-        <span class="show-btn" onclick="togglePw('adminPassword',this)">SHOW</span>
-      </div>
-      <button class="btn-primary btn-admin" type="submit" id="adminBtn">
-        <i class="fas fa-shield-halved"></i> Access Admin Panel
-      </button>
-    </form>
-  </div>
-</div>
-
+<footer class="site-footer"><p>SenTri Community Safety Incident Reporting System &mdash; For official and community use only.</p></footer>
 <script>
-// ── Particle background ────────────────────────────────────────────────────
-(function(){
-  const c=document.getElementById('particles');
-  for(let i=0;i<50;i++){
-    const p=document.createElement('div');
-    p.className='particle';
-    p.style.cssText=`left:${Math.random()*100}%;animation-duration:${6+Math.random()*10}s;animation-delay:${-Math.random()*16}s;width:${1+Math.random()*2}px;height:${1+Math.random()*2}px;opacity:${0.2+Math.random()*0.5};background:rgba(255,255,255,${0.3+Math.random()*0.4});`;
-    c.appendChild(p);
-  }
-})();
-
-// ── Attempt-lock state ─────────────────────────────────────────────────────
-const MAX_ATTEMPTS  = 3;
-const LOCKOUT_SECS  = 10;
-
-const state = {
-  user:  { attempts: 0, locked: false, timer: null },
-  admin: { attempts: 0, locked: false, timer: null },
+const portals={
+  community:      {title:'Community Member Sign In',     sub:'Access the citizen incident reporting dashboard',         icon:'fa-users',         bg:'#eff6ff',  color:'#2563eb',  btn:'linear-gradient(135deg,#3b82f6,#2563eb)',   label:'Sign In to Community Portal',   official:false},
+  barangay:       {title:'Barangay Official Sign In',    sub:'Barangay operations and incident management portal',      icon:'fa-house-flag',    bg:'#f0fdf4',  color:'#166534',  btn:'linear-gradient(135deg,#16a34a,#166534)',   label:'Sign In to Barangay Portal',    official:true},
+  lgu:            {title:'LGU Official Sign In',         sub:'City and municipal government incident oversight portal', icon:'fa-landmark',      bg:'#f0f7ff',  color:'#0a3d62',  btn:'linear-gradient(135deg,#1a5276,#062444)',   label:'Sign In to LGU Portal',         official:true},
+  first_responder:{title:'First Responder Sign In',      sub:'Emergency dispatch and active incident response portal', icon:'fa-truck-medical', bg:'#fef2f2',  color:'#b91c1c',  btn:'linear-gradient(135deg,#ef4444,#b91c1c)',   label:'Sign In to Responder Portal',   official:true},
+  admin:          {title:'System Administrator Sign In', sub:'Default credentials: username <b>admin</b> / password <b>admin</b>',         icon:'fa-gear',          bg:'#f5f3ff',  color:'#5b21b6',  btn:'linear-gradient(135deg,#7c3aed,#5b21b6)',   label:'Access Admin Panel',            official:true},
 };
+let current='community';
+let timerInterval = null;
 
-function getScope(formId){ return formId === 'userForm' ? 'user' : 'admin'; }
-
-function updateAttemptBadge(scope) {
-  const s        = state[scope];
-  const badge    = document.getElementById(scope + 'AttemptBadge');
-  const text     = document.getElementById(scope + 'AttemptText');
-  const remaining = MAX_ATTEMPTS - s.attempts;
-
-  if (s.attempts === 0) { badge.style.display = 'none'; return; }
-  if (s.locked)         { badge.style.display = 'none'; return; }
-
-  badge.style.display = 'flex';
-  badge.classList.toggle('last-attempt', remaining === 1);
-
-  text.textContent = remaining === 1
-    ? '⚠ Last attempt — account will lock!'
-    : `${remaining} attempt${remaining !== 1 ? 's' : ''} remaining`;
-
-  // Update dots: filled = used, empty = remaining
-  for (let i = 1; i <= MAX_ATTEMPTS; i++) {
-    const dot = document.getElementById(scope + 'Dot' + i);
-    dot.classList.toggle('used', i > remaining);
-    dot.style.opacity = i > remaining ? '1' : '0.2';
+function selectPortal(key,el){
+  current=key;
+  document.querySelectorAll('.portal-card').forEach(c=>c.classList.remove('selected'));
+  el.classList.add('selected');
+  const p=portals[key];
+  const pi=document.getElementById('phIcon');
+  pi.style.cssText=`background:${p.bg};color:${p.color};`;
+  pi.innerHTML=`<i class="fas ${p.icon}"></i>`;
+  document.getElementById('phTitle').textContent=p.title;
+  document.getElementById('phSub').innerHTML=p.sub;
+  document.getElementById('portalField').value=key;
+  const btn=document.getElementById('loginBtn');
+  btn.style.background=p.btn;
+  btn.innerHTML=`<i class="fas fa-right-to-bracket"></i> ${p.label}`;
+  const on=document.getElementById('officialNotice');
+  on.style.display=p.official?'flex':'none';
+  document.getElementById('signupRow').style.display=(key==='community')?'block':'none';
+  if(key==='admin'){ 
+    document.getElementById('emailField').value='admin'; 
+    document.getElementById('pwField').value='admin'; 
+  } else { 
+    document.getElementById('emailField').value=''; 
+    document.getElementById('pwField').value=''; 
   }
+  document.getElementById('loginMsg').style.display='none';
+  document.getElementById('resendBox').style.display='none';
 }
 
-function startLockout(scope) {
-  const s       = state[scope];
-  s.locked      = true;
+function togglePw(){const f=document.getElementById('pwField');const b=f.nextElementSibling;const s=f.type==='password';f.type=s?'text':'password';b.textContent=s?'HIDE':'SHOW';}
 
-  const lockBox    = document.getElementById(scope + 'Lockout');
-  const countdown  = document.getElementById(scope + 'Countdown');
-  const bar        = document.getElementById(scope + 'Bar');
-  const btn        = document.getElementById(scope === 'user' ? 'loginBtn' : 'adminBtn');
-  const form       = document.getElementById(scope + 'Form');
-  const badge      = document.getElementById(scope + 'AttemptBadge');
+function showOtpForm(email){
+  const loginForm=document.getElementById('loginForm');
+  const otpSection=document.getElementById('otpSection');
+  const otpEmail=document.getElementById('otpEmail');
+  const otpField=document.getElementById('otpField');
+  loginForm.style.display='none';
+  otpSection.style.display='block';
+  otpEmail.value=email;
+  otpField.value='';
+  otpField.focus();
+  document.getElementById('resendBox').style.display='none';
+}
 
-  // Show lockout, hide badge, disable inputs
-  lockBox.classList.add('active');
-  badge.style.display = 'none';
+function hideOtpForm(){
+  document.getElementById('otpSection').style.display='none';
+  document.getElementById('loginForm').style.display='block';
+  document.getElementById('loginMsg').style.display='none';
+}
+
+document.getElementById('otpBackBtn').addEventListener('click',()=>hideOtpForm());
+
+document.getElementById('otpForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const btn=document.getElementById('otpSubmitBtn');const msg=document.getElementById('loginMsg');const orig=btn.innerHTML;
+  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Verifying...';msg.style.display='none';
+  try{
+    const res=await fetch('login.php',{method:'POST',body:new FormData(e.target)});
+    const data=await res.json();
+    if(data.status==='success'){showMsg('success',data.message||'Redirecting...');setTimeout(()=>window.location.href=data.redirect,700);}
+    else{
+      showMsg('error',data.message||'Invalid OTP.');
+      btn.disabled=false;btn.innerHTML=orig;
+      if(data.lockout){startLockTimer(30);}    
+    }
+  }catch{showMsg('error','Connection error. Please try again.');btn.disabled=false;btn.innerHTML=orig;}
+});
+
+function startLockTimer(seconds) {
+  const btn = document.getElementById('loginBtn');
+  const msg = document.getElementById('loginMsg');
   btn.disabled = true;
-  form.querySelectorAll('input').forEach(el => el.disabled = true);
+  let timeLeft = seconds;
 
-  // Animate the drain bar using CSS transition
-  bar.style.transition = `width ${LOCKOUT_SECS}s linear`;
-  // Force reflow so transition fires from 100%
-  bar.getBoundingClientRect();
-  bar.style.width = '0%';
+  if (timerInterval) clearInterval(timerInterval);
 
-  let secs = LOCKOUT_SECS;
-  countdown.textContent = secs;
+  showMsg('error', `Too many failed attempts. Please wait ${timeLeft} seconds before trying again.`);
 
-  s.timer = setInterval(() => {
-    secs--;
-    countdown.textContent = secs;
-    if (secs <= 0) {
-      clearInterval(s.timer);
-      s.timer    = null;
-      s.locked   = false;
-      s.attempts = 0;
-
-      // Hide lockout, re-enable
-      lockBox.classList.remove('active');
+  timerInterval = setInterval(() => {
+    timeLeft--;
+    btn.innerHTML = `<i class="fas fa-lock"></i> Wait ${timeLeft}s`;
+    showMsg('error', `Too many failed attempts. Please wait ${timeLeft} seconds before trying again.`);
+    if (timeLeft <= 0) {
+      clearInterval(timerInterval);
       btn.disabled = false;
-      form.querySelectorAll('input').forEach(el => el.disabled = false);
-
-      // Reset bar for next potential lockout
-      bar.style.transition = 'none';
-      bar.style.width = '100%';
-
-      // Clear any error messages
-      const msgEl = document.getElementById(scope + 'Msg');
-      msgEl.style.display = 'none';
-      updateAttemptBadge(scope);
+      const p = portals[current];
+      btn.innerHTML = `<i class="fas fa-right-to-bracket"></i> ${p.label}`;
+      msg.style.display = 'none';
     }
   }, 1000);
 }
 
-function recordFailure(scope, btn, btnOrigHTML) {
-  const s = state[scope];
-  if (s.locked) return;
-
-  s.attempts++;
-
-  // Shake the button
-  btn.classList.remove('shake');
-  void btn.offsetWidth; // reflow
-  btn.classList.add('shake');
-  btn.addEventListener('animationend', () => btn.classList.remove('shake'), { once: true });
-
-  if (s.attempts >= MAX_ATTEMPTS) {
-    btn.innerHTML = btnOrigHTML;
-    startLockout(scope);
-  } else {
-    updateAttemptBadge(scope);
-  }
-}
-
-// ── Tab switching ──────────────────────────────────────────────────────────
-function switchTab(mode){
-  const isAdmin=mode==='admin';
-  document.getElementById('userSection').classList.toggle('active',!isAdmin);
-  document.getElementById('adminSection').classList.toggle('active',isAdmin);
-  document.getElementById('tabUser').className='tab-btn'+((!isAdmin)?' active-user':'');
-  document.getElementById('tabAdmin').className='tab-btn'+((isAdmin)?' active-admin':'');
-}
-
-function togglePw(id,btn){
-  const el=document.getElementById(id);
-  const s=el.type==='text';
-  el.type=s?'password':'text';
-  btn.textContent=s?'SHOW':'HIDE';
-}
-
-// ── Login handler ──────────────────────────────────────────────────────────
-async function handleLogin(formId, btnId, msgId){
-  const scope  = getScope(formId);
-  const s      = state[scope];
-  if (s.locked) return;
-
-  const btn    = document.getElementById(btnId);
-  const msgEl  = document.getElementById(msgId);
-  const form   = document.getElementById(formId);
-  const fd     = new FormData(form);
-  const email  = fd.get('email')?.trim();
-  const password = fd.get('password')?.trim();
-
-  if (!email || !password) { show(msgEl,'error','Please fill in all fields.'); return; }
-
-  const orig = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Signing in...';
-
-  try {
-    const res  = await fetch('login.php', { method: 'POST', body: fd });
-    const data = await res.json();
-
-    if (data.status === 'success') {
-      show(msgEl, 'success', data.message);
-      // Clear any attempt badge on success
-      document.getElementById(scope + 'AttemptBadge').style.display = 'none';
-      setTimeout(() => { window.location.href = data.redirect; }, 800);
-    } else {
-      show(msgEl, 'error', data.message);
-
-      // Don't count unverified as a lockout-worthy failure
-      if (!data.unverified) {
-        recordFailure(scope, btn, orig);
-      }
-
-      if (!s.locked) {
-        btn.disabled = false;
-        btn.innerHTML = orig;
-      }
-
-      // Show resend block if unverified
-      if (data.unverified) {
-        const rb = document.getElementById('resendBlock');
-        const ri = document.getElementById('resendEmailInput');
-        if (rb) rb.style.display = 'block';
-        if (ri && data.email) ri.value = data.email;
-        btn.disabled = false;
-        btn.innerHTML = orig;
-      }
+document.getElementById('loginForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const btn=document.getElementById('loginBtn');const msg=document.getElementById('loginMsg');const orig=btn.innerHTML;
+  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Signing in...';msg.style.display='none';
+  try{
+    const res=await fetch('login.php',{method:'POST',body:new FormData(e.target)});
+    const data=await res.json();
+    if(data.status==='success'){showMsg('success',data.message||'Redirecting...');setTimeout(()=>window.location.href=data.redirect,700);}
+    else if(data.status==='otp_required'){
+      showMsg('success',data.message||'Enter the 6-digit code from your email.');
+      showOtpForm(data.email || document.getElementById('emailField').value);
+      btn.disabled=false;
+      btn.innerHTML=orig;
     }
-  } catch {
-    show(msgEl, 'error', 'Something went wrong. Please try again.');
-    btn.disabled = false;
-    btn.innerHTML = orig;
-  }
+    else{
+      showMsg('error',data.message||'Sign in failed.');
+      if(data.lockout) {
+        startLockTimer(30);
+      } else {
+        btn.disabled=false;
+        const p = portals[current];
+        btn.innerHTML = `<i class="fas fa-right-to-bracket"></i> ${p.label}`;
+      }
+      if(data.unverified){document.getElementById('resendBox').style.display='block';document.getElementById('resendEmail').value=document.getElementById('emailField').value;}
+    }
+  }catch{showMsg('error','Connection error. Please try again.');btn.disabled=false;btn.innerHTML=orig;}
+});
+
+async function resend(){
+  const email=document.getElementById('resendEmail').value.trim();const btn=document.getElementById('resendBtn');
+  if(!email)return;btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Sending...';
+  const fd=new FormData();fd.append('portal','resend');fd.append('email',email);fd.append('password','__resend__');
+  try{const res=await fetch('login.php',{method:'POST',body:fd});const data=await res.json();showMsg('success',data.message);btn.innerHTML='<i class="fas fa-check"></i> Sent!';}
+  catch{btn.disabled=false;btn.innerHTML='<i class="fas fa-paper-plane"></i> Resend';}
 }
-
-async function resendVerification(){
-  const email  = document.getElementById('resendEmailInput')?.value?.trim();
-  const btn    = document.getElementById('resendBtn');
-  const msgEl  = document.getElementById('userMsg');
-  if (!email) { show(msgEl,'error','Please enter your email address.'); return; }
-  const orig = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
-  try {
-    const fd = new FormData();
-    fd.append('mode','resend_verification');
-    fd.append('email', email);
-    fd.append('password','__resend__');
-    const res  = await fetch('login.php', { method:'POST', body:fd });
-    const data = await res.json();
-    show(msgEl, 'success', data.message);
-    btn.innerHTML = '<i class="fas fa-check"></i> Sent!';
-  } catch {
-    show(msgEl,'error','Something went wrong.');
-    btn.disabled = false;
-    btn.innerHTML = orig;
-  }
-}
-
-document.getElementById('userForm').addEventListener('submit', e => { e.preventDefault(); handleLogin('userForm','loginBtn','userMsg'); });
-document.getElementById('adminForm').addEventListener('submit', e => { e.preventDefault(); handleLogin('adminForm','adminBtn','adminMsg'); });
-
-function show(el, type, text){ el.className='msg '+type; el.textContent=text; el.style.display='block'; }
+function showMsg(type,text){const el=document.getElementById('loginMsg');el.className='msg '+type;el.textContent=text;el.style.display='block';}
 </script>
 </body>
 </html>

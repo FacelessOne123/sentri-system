@@ -9,6 +9,7 @@ $total_users    = $conn->query("SELECT COUNT(*) FROM users")->fetch_row()[0];
 $total_reports  = $conn->query("SELECT COUNT(*) FROM reports WHERE is_archived=0")->fetch_row()[0];
 $total_archived = $conn->query("SELECT COUNT(*) FROM reports WHERE is_archived=1")->fetch_row()[0];
 $danger_count   = $conn->query("SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0")->fetch_row()[0];
+$pending_count  = $conn->query("SELECT COUNT(*) FROM users WHERE is_approved=0 AND role NOT IN('community','user','admin')")->fetch_row()[0];
 $first_name     = $_SESSION['first_name'];
 ?>
 <!DOCTYPE html>
@@ -46,7 +47,7 @@ body{background:var(--bg);display:flex;min-height:100vh;color:var(--text);}
   width:var(--sidebar-w);
   background:linear-gradient(180deg,#1a1a2e 0%,#16213e 60%,#0f1629 100%);
   color:#fff;display:flex;flex-direction:column;flex-shrink:0;
-  position:fixed;top:0;left:0;bottom:0;z-index:100;
+  position:fixed;top:0;left:0;bottom:0;z-index:200;
   transition:transform 0.3s cubic-bezier(0.4,0,0.2,1);
   box-shadow:4px 0 24px rgba(0,0,0,0.25);
 }
@@ -82,7 +83,7 @@ body{background:var(--bg);display:flex;min-height:100vh;color:var(--text);}
 .main.expanded{margin-left:0;}
 
 /* ── TOPBAR ── */
-.topbar{background:#fff;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 12px rgba(0,0,0,0.07);position:sticky;top:0;z-index:50;}
+.topbar{background:#fff;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 12px rgba(0,0,0,0.07);position:sticky;top:0;z-index:100;}
 .topbar-left{display:flex;align-items:center;gap:14px;}
 .ham-btn{background:none;border:none;font-size:1.2rem;color:var(--muted);cursor:pointer;padding:6px;border-radius:8px;transition:all 0.2s;display:none;}
 .ham-btn:hover{background:#f0f2f7;color:var(--text);}
@@ -176,8 +177,13 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
 .user-avatar-sm.admin-av{background:linear-gradient(135deg,var(--admin-light),var(--admin));}
 
 /* ── OVERLAY FOR MOBILE SIDEBAR ── */
-.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:99;}
+.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:150;}
 .sidebar-overlay.show{display:block;}
+.badge.community{background:#eff6ff;color:#2563eb;}
+.badge.barangay{background:#f0fdf4;color:#166534;}
+.badge.lgu{background:#f0f7ff;color:#0a3d62;}
+.badge.first_responder{background:#fef2f2;color:#b91c1c;}
+.badge.user{background:#ebf2ff;color:#2563eb;}
 
 /* ── MOBILE ── */
 @media(max-width:900px){
@@ -199,6 +205,28 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
   .stat-card{padding:16px 18px;}
   .panel{padding:16px;}
   .tab-nav{overflow-x:auto;}
+}
+.vuln-row{display:grid;grid-template-columns:repeat(5,minmax(160px,1fr));gap:16px;margin-top:18px;}
+.vuln-card{background:#f8fbff;border:1px solid #e6effc;border-radius:16px;padding:18px;min-height:120px;display:flex;flex-direction:column;gap:10px;box-shadow:0 3px 18px rgba(15,23,42,0.05);}
+.vuln-card strong{font-size:0.95rem;color:var(--text);}
+.vuln-status{font-weight:700;font-size:0.95rem;}
+.vuln-status.passed{color:#166534;}
+.vuln-status.warning{color:#b45309;}
+.vuln-status.critical{color:#b91c1c;}
+.vuln-detail{font-size:0.8rem;color:#555;line-height:1.5;}
+#vulnerabilityScore{letter-spacing:0.03em;}
+.modal-overlay.vuln-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:10000;align-items:center;justify-content:center;padding:18px;}
+.modal-overlay.vuln-modal .modal-dialog{width:100%;max-width:1100px;}
+.modal-overlay.vuln-modal .panel{border-radius:20px;overflow:hidden;}
+.modal-overlay.vuln-modal .panel-header{padding:22px 24px;gap:14px;}
+.modal-overlay.vuln-modal .panel .table-wrap{padding:0 24px 24px;}
+.modal-overlay.vuln-modal .close-modal-btn{background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;}
+.modal-overlay.vuln-modal .close-modal-btn:hover{color:var(--text);}
+@media(max-width:900px){
+  .vuln-row{grid-template-columns:1fr 1fr;}
+}
+@media(max-width:640px){
+  .vuln-row{grid-template-columns:1fr;}
 }
 </style>
 </head>
@@ -222,26 +250,36 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
   <div style="margin-top:12px;">
     <div class="nav-section">Navigation</div>
     <nav class="menu">
-  <button class="menu-item active" id="navOverview" onclick="showTab('overview')">
-    <i class="fas fa-gauge"></i> Overview
-  </button>
-  <button class="menu-item" id="navUsers" onclick="showTab('users')">
-    <i class="fas fa-users"></i> Manage Users
-    <span class="menu-badge" id="userCount">—</span>
-  </button>
-  <button class="menu-item" id="navPosts" onclick="showTab('posts')">
-    <i class="fas fa-clipboard-list"></i> Manage Posts
-  </button>
-  <button class="menu-item" id="navAudit" onclick="showTab('audit')">
-    <i class="fas fa-shield-halved"></i> Reports Audit
-  </button>
-  <button class="menu-item" id="navLogs" onclick="showTab('logs')">
-    <i class="fas fa-scroll"></i> Login Logs
-  </button>
-  <button class="menu-item" id="navContacts" onclick="showTab('contacts')">
-    <i class="fas fa-address-book"></i> Emergency Contacts
-  </button>
-</nav>
+      <button class="menu-item active" id="navOverview" onclick="showTab('overview')">
+        <i class="fas fa-gauge"></i> Overview
+      </button>
+      <button class="menu-item" id="navUsers" onclick="showTab('users')">
+        <i class="fas fa-users"></i> Manage Users
+        <span class="menu-badge" id="userCount">—</span>
+      </button>
+      <button class="menu-item" id="navPending" onclick="showTab('pending')">
+        <i class="fas fa-clock"></i> Pending Approvals
+        <?php if($pending_count > 0): ?><span class="menu-badge" id="pendingNavBadge"><?= $pending_count ?></span><?php endif; ?>
+      </button>
+      <button class="menu-item" id="navPosts" onclick="showTab('posts')">
+        <i class="fas fa-clipboard-list"></i> Manage Posts
+      </button>
+      <button class="menu-item" id="navAudit" onclick="showTab('audit')">
+        <i class="fas fa-shield-halved"></i> Reports Audit
+      </button>
+      <button class="menu-item" id="navLogs" onclick="showTab('logs')">
+        <i class="fas fa-scroll"></i> Login Logs
+      </button>
+      <button class="menu-item" id="navSecurity" onclick="showTab('security')">
+        <i class="fas fa-shield-exclamation"></i> Security Monitor
+      </button>
+      <button class="menu-item" id="navContacts" onclick="showTab('contacts')">
+        <i class="fas fa-address-book"></i> Emergency Contacts
+      </button>
+      <button class="menu-item" id="navVulnerabilities" onclick="openVulnerabilityModal()">
+        <i class="fas fa-shield-exclamation"></i> Vulnerability Assessment
+      </button>
+    </nav>
     <div class="nav-section" style="margin-top:16px;">Quick Links</div>
     <nav class="menu">
       <a href="dashboard.php" class="menu-item">
@@ -308,6 +346,13 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
           <div class="stat-label">Archived Posts</div>
         </div>
       </div>
+      <div class="stat-card" style="border-left:4px solid #d97706;">
+        <div class="stat-icon" style="background:rgba(251,191,36,0.15);color:#d97706;"><i class="fas fa-clock"></i></div>
+        <div>
+          <div class="stat-num" id="pendingStatNum"><?= $pending_count ?></div>
+          <div class="stat-label">Pending Approvals</div>
+        </div>
+      </div>
     </div>
 
     <!-- ── OVERVIEW TAB ── -->
@@ -338,8 +383,12 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
           <input type="text" id="userSearch" placeholder="Search name or email...">
           <select id="userRoleFilter">
             <option value="">All Roles</option>
-            <option value="user">Members</option>
-            <option value="admin">Admins</option>
+            <option value="community">Community</option>
+            <option value="user">Legacy Members</option>
+            <option value="barangay">Barangay</option>
+            <option value="lgu">LGU</option>
+            <option value="first_responder">First Responder</option>
+            <option value="admin">Admin</option>
           </select>
         </div>
         <div class="table-wrap">
@@ -368,10 +417,10 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
             <option value="safe">Safe</option>
           </select>
           <select id="postArchived">
-          <option value="" selected>All</option>
-          <option value="0">Active Only</option>
-          <option value="1">Archived Only</option>
-</select>
+            <option value="0">Active Only</option>
+            <option value="1">Archived Only</option>
+            <option value="">All</option>
+          </select>
         </div>
         <div class="table-wrap">
           <div class="loading" id="postsLoading"><i class="fas fa-spinner"></i> Loading posts...</div>
@@ -396,42 +445,120 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
             <thead><tr><th>#</th><th>Email</th><th>Status</th><th>IP Address</th><th>Device</th><th>Date / Time</th></tr></thead>
             <tbody id="logsBody"></tbody>
           </table>
+          <div id="logsPaginationContainer" style="display:none;padding:16px;border-top:1px solid var(--border);background:#fafbfc;"></div>
         </div>
       </div>
     </div>
 
-    <!-- ── AUDIT TAB ── -->
-<div class="tab-panel" id="tab-audit">
+    <!-- ── SECURITY MONITOR TAB ── -->
+<div class="tab-panel" id="tab-security">
   <div class="panel">
     <div class="panel-header">
-      <div class="panel-title"><i class="fas fa-shield-halved"></i> Reports Audit Log</div>
-      <span style="font-size:0.8rem;color:var(--muted);">All archive / restore actions</span>
+      <div class="panel-title">
+        <i class="fas fa-shield-exclamation"></i> Security Monitor
+      </div>
+      <span style="font-size:0.8rem;color:var(--muted);">Failed Login Attempts & Flagged Accounts</span>
     </div>
+
+    <!-- Risk Summary -->
+    <div class="stats-row" style="margin-bottom:20px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+      <div class="stat-card red">
+        <div class="stat-icon red"><i class="fas fa-exclamation-triangle"></i></div>
+        <div>
+          <div class="stat-num" id="highRiskCount">0</div>
+          <div class="stat-label">High Risk Accounts</div>
+        </div>
+      </div>
+      <div class="stat-card orange">
+        <div class="stat-icon" style="background:#fff7ed;color:#dd6b20;"><i class="fas fa-exclamation-circle"></i></div>
+        <div>
+          <div class="stat-num" id="mediumRiskCount">0</div>
+          <div class="stat-label">Medium Risk</div>
+        </div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-icon green"><i class="fas fa-check-circle"></i></div>
+        <div>
+          <div class="stat-num" id="totalFlagged">0</div>
+          <div class="stat-label">Total Flagged</div>
+        </div>
+      </div>
+    </div>
+
     <div class="filter-bar">
-      <input type="text" id="auditSearch" placeholder="Search title or admin name...">
-      <select id="auditAction">
-        <option value="">All Actions</option>
-        <option value="archived">Archived</option>
-        <option value="restored">Restored</option>
+      <input type="text" id="securitySearch" placeholder="Search email or IP..." style="flex:1;">
+      <select id="riskFilter">
+        <option value="">All Risk Levels</option>
+        <option value="high">High Risk Only</option>
+        <option value="medium">Medium Risk</option>
+        <option value="normal">Normal</option>
       </select>
     </div>
+    <div style="display:flex;align-items:center;gap:12px;margin:14px 0 8px;flex-wrap:wrap;">
+      <button class="btn-action del" id="deleteSelectedFlagsBtn" onclick="deleteSelectedFlags()" disabled style="padding:10px 14px;"><i class="fas fa-trash"></i> Delete Selected</button>
+      <button class="btn-action del" onclick="deleteAllFlagged()" style="padding:10px 14px;background:#f8fafc;color:#111;border:1px solid #cbd5e1;"><i class="fas fa-trash-can"></i> Delete All Flagged</button>
+      <div id="securitySelectionSummary" style="color:var(--muted);font-size:0.9rem;">Selected 0 of 0 flagged accounts</div>
+    </div>
     <div class="table-wrap">
-      <div class="loading" id="auditLoading"><i class="fas fa-spinner"></i> Loading audit log...</div>
-      <table id="auditTable" style="display:none;">
+      <div class="loading" id="securityLoading"><i class="fas fa-spinner"></i> Loading security data...</div>
+      <table id="securityTable" style="display:none;">
         <thead>
           <tr>
+            <th style="width:42px;"><input type="checkbox" id="securitySelectAll" onchange="toggleSecuritySelectAll(this)"></th>
             <th>#</th>
-            <th>Report</th>
-            <th>Action</th>
-            <th>Performed By</th>
-            <th>Date / Time</th>
+            <th>Email</th>
+            <th>IP Address</th>
+            <th>Failed Attempts (30min)</th>
+            <th>Risk Level</th>
+            <th>Last Attempt</th>
+            <th>Status</th>
+            <th>Actions</th>
           </tr>
         </thead>
-        <tbody id="auditBody"></tbody>
+        <tbody id="securityBody"></tbody>
       </table>
+      <div id="securityPaginationContainer" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:14px;"></div>
     </div>
   </div>
 </div>
+
+    <div class="modal-overlay vuln-modal" id="vulnerabilityModalOverlay" onclick="if(event.target===this) closeVulnerabilityModal()">
+      <div class="modal-dialog">
+        <div class="panel">
+          <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+            <div class="panel-title"><i class="fas fa-biohazard"></i> Vulnerability Assessment</div>
+            <button class="close-modal-btn" onclick="closeVulnerabilityModal()" aria-label="Close"><i class="fas fa-xmark"></i></button>
+          </div>
+          <div class="filter-bar" style="align-items:flex-start; gap:16px; padding:0 24px 18px;">
+            <div style="flex:1;min-width:220px;">
+              <div style="font-size:0.82rem;color:var(--muted);margin-bottom:6px;">Last Scan Date</div>
+              <div id="lastScanDate" style="font-weight:700;color:var(--text);">Never</div>
+            </div>
+            <div style="flex:1;min-width:220px;">
+              <div style="font-size:0.82rem;color:var(--muted);margin-bottom:6px;">Overall Security Score</div>
+              <div id="vulnerabilityScore" style="font-size:1.8rem;font-weight:800;color:var(--blue);">0/100</div>
+            </div>
+            <button class="btn-action approve" onclick="runVulnerabilityAssessment()" style="margin-top:8px;"><i class="fas fa-play"></i> Run Assessment</button>
+          </div>
+          <div class="vuln-row" id="vulnSummaryRow" style="padding:0 24px 18px;">
+            <div class="vuln-card" id="vulnCardHttps"><strong>HTTPS</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Check if HTTPS is enabled.</div></div>
+            <div class="vuln-card" id="vulnCardSession"><strong>Session Security</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Inspect session cookie settings.</div></div>
+            <div class="vuln-card" id="vulnCardPassword"><strong>Password Hashing</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Verify bcrypt/password_hash usage.</div></div>
+            <div class="vuln-card" id="vulnCardHeaders"><strong>Security Headers</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Check standard response headers.</div></div>
+            <div class="vuln-card" id="vulnCardUpload"><strong>Upload Restrictions</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Confirm file upload restrictions.</div></div>
+          </div>
+          <div class="table-wrap" style="margin-top:0;padding:0 24px 24px;">
+            <table id="vulnHistoryTable" style="display:none; width:100%;">
+              <thead>
+                <tr><th>#</th><th>Date</th><th>Score</th><th>HTTPS</th><th>Session</th><th>Password</th><th>Headers</th><th>Uploads</th></tr>
+              </thead>
+              <tbody id="vulnHistoryBody"></tbody>
+            </table>
+            <div class="loading" id="vulnHistoryLoading"><i class="fas fa-spinner"></i> Loading vulnerability history...</div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div class="tab-panel" id="tab-contacts">
       <div class="panel">
@@ -457,6 +584,58 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
           <table id="contactsTable" style="display:none;">
             <thead><tr><th>#</th><th>Name</th><th>Type</th><th>Barangay</th><th>City</th><th>Phone</th><th>Email</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="contactsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ── AUDIT TAB ── -->
+    <div class="tab-panel" id="tab-audit">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><i class="fas fa-shield-halved"></i> Reports Audit Log</div>
+          <span style="font-size:0.8rem;color:var(--muted);">All archive / restore actions</span>
+        </div>
+        <div class="filter-bar">
+          <input type="text" id="auditSearch" placeholder="Search title or admin name...">
+          <select id="auditAction">
+            <option value="">All Actions</option>
+            <option value="archived">Archived</option>
+            <option value="restored">Restored</option>
+          </select>
+        </div>
+        <div class="table-wrap">
+          <div class="loading" id="auditLoading"><i class="fas fa-spinner"></i> Loading audit log...</div>
+          <table id="auditTable" style="display:none;">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Report</th>
+                <th>Action</th>
+                <th>Performed By</th>
+                <th>Date / Time</th>
+              </tr>
+            </thead>
+            <tbody id="auditBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PENDING APPROVALS TAB ── -->
+    <div class="tab-panel" id="tab-pending">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><i class="fas fa-clock"></i> Pending Official Account Approvals</div>
+          <span style="font-size:0.8rem;color:var(--muted);">Official accounts awaiting verification</span>
+        </div>
+        <div class="table-wrap">
+          <div class="loading" id="pendingLoading"><i class="fas fa-spinner"></i> Loading...</div>
+          <div id="pendingEmpty" style="display:none;padding:48px;text-align:center;color:var(--muted);"><i class="fas fa-check-circle" style="font-size:2rem;display:block;margin-bottom:10px;color:#16a34a;opacity:0.5;"></i>No pending approvals.</div>
+          <table id="pendingTable" style="display:none;">
+            <thead><tr><th>#</th><th>Applicant</th><th>Email</th><th>Role</th><th>Office / Unit</th><th>Position</th><th>Jurisdiction</th><th>Applied</th><th>Actions</th></tr></thead>
+            <tbody id="pendingBody"></tbody>
           </table>
         </div>
       </div>
@@ -520,32 +699,54 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
       </div>
     </div>
 
+    <!-- DELETE CONFIRMATION MODAL -->
+    <div class="modal-overlay" id="deleteModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:var(--card);border-radius:16px;padding:28px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+          <h3 style="font-size:1.05rem;font-weight:700;"><i class="fas fa-trash" style="color:#dc2626;margin-right:8px;"></i>Confirm Delete</h3>
+          <button onclick="closeDeleteModal()" style="background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted);"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div id="deleteModalMessage" style="margin-bottom:18px;color:var(--text);line-height:1.6;">Are you sure you want to delete this flagged account? This action cannot be undone.</div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button onclick="closeDeleteModal()" style="padding:11px 22px;border:1.5px solid var(--border);background:var(--card);border-radius:10px;font-size:0.9rem;cursor:pointer;font-family:'Poppins',sans-serif;font-weight:500;color:var(--text);">Cancel</button>
+          <button onclick="confirmDeleteFlag()" id="confirmDeleteBtn" style="padding:11px 22px;background:#dc2626;color:#fff;border:none;border-radius:10px;font-size:0.9rem;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif;">Delete</button>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /content -->
 </div><!-- /main -->
 
 <script>
-let allReports=[], allUsers=[], allLogs=[], allContacts=[];
+let allReports=[], allUsers=[], allLogs=[], allContacts=[], allSecurityScans=[];
 let currentTab='overview';
+let currentLogsPage = 1;
+const logsItemsPerPage = 10;
 
 // ── Sidebar ──────────────────────────────────────────────────
 function openSidebar(){
   document.getElementById('sidebar').classList.add('mobile-open');
   document.getElementById('overlay').classList.add('show');
+  document.body.style.overflow='hidden';
 }
 function closeSidebar(){
   document.getElementById('sidebar').classList.remove('mobile-open');
   document.getElementById('overlay').classList.remove('show');
+  document.body.style.overflow='';
 }
 
 // ── Tab navigation ────────────────────────────────────────────
 const tabTitles = {
-  overview: '<i class="fas fa-gauge" style="color:var(--blue);margin-right:8px;"></i>Overview',
-  users:    '<i class="fas fa-users" style="color:var(--blue);margin-right:8px;"></i>Manage Users',
-  posts:    '<i class="fas fa-clipboard-list" style="color:var(--blue);margin-right:8px;"></i>Manage Posts',
-  audit:    '<i class="fas fa-shield-halved" style="color:var(--blue);margin-right:8px;"></i>Reports Audit',
-  logs:     '<i class="fas fa-scroll" style="color:var(--blue);margin-right:8px;"></i>Login Logs',
-  contacts: '<i class="fas fa-address-book" style="color:var(--blue);margin-right:8px;"></i>Emergency Contacts',
+  overview:'<i class="fas fa-gauge" style="color:var(--blue);margin-right:8px;"></i>Overview',
+  users:'<i class="fas fa-users" style="color:var(--blue);margin-right:8px;"></i>Manage Users',
+  pending:'<i class="fas fa-clock" style="color:#d97706;margin-right:8px;"></i>Pending Approvals',
+  posts:'<i class="fas fa-clipboard-list" style="color:var(--blue);margin-right:8px;"></i>Manage Posts',
+  audit:'<i class="fas fa-shield-halved" style="color:var(--blue);margin-right:8px;"></i>Reports Audit',
+  logs:'<i class="fas fa-scroll" style="color:var(--blue);margin-right:8px;"></i>Login Logs',
+  security:'<i class="fas fa-shield-exclamation" style="color:var(--red);margin-right:8px;"></i>Security Monitor',
+  contacts:'<i class="fas fa-address-book" style="color:var(--blue);margin-right:8px;"></i>Emergency Contacts',
 };
+let pendingLoaded = false;
 function showTab(name){
   currentTab=name;
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
@@ -553,12 +754,20 @@ function showTab(name){
   document.getElementById('tab-'+name).classList.add('active');
   document.getElementById('nav'+name.charAt(0).toUpperCase()+name.slice(1))?.classList.add('active');
   document.getElementById('pageTitle').innerHTML=tabTitles[name];
-
+  
+  // Lazy load
   if(name==='users'    && allUsers.length===0)    loadUsers();
-  if(name==='posts')                              loadReports();  // always call
+  if(name==='posts')                              loadReports();
+  if(name==='pending'  && !pendingLoaded)          loadPending();
+  if(name==='audit')                               loadAuditLogs();
   if(name==='logs'     && allLogs.length===0)     loadLogs();
-  if(name==='audit') loadAuditLogs();
+  if(name==='security')                           loadSecurityMonitor();
+  if(name==='vulnerabilities')                    loadVulnerabilities();
   if(name==='contacts' && allContacts.length===0) loadContacts();
+  
+  // ←←← ADD THIS LINE FOR SECURITY MONITOR
+  if(name==='security') loadSecurityMonitor();
+
   if(window.innerWidth<=900) closeSidebar();
 }
 
@@ -614,21 +823,41 @@ function renderUsers(){
   body.innerHTML=list.map(u=>{
     const date=new Date(u.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
     const initials=(u.first_name[0]||'?').toUpperCase();
-    return `<tr id="urow_${u.id}">
+    const isPending = u.is_approved===0 && u.role!=='community' && u.role!=='admin';
+    const roleLabel = u.role.replace('_',' ');
+    const orgInfo = u.org_name ? `<div style="font-size:0.72rem;color:#888;">${esc(u.org_name)}</div>` : '';
+    return `<tr id="urow_${u.id}" ${isPending?'style="background:#fffbeb;"':''}>
       <td style="color:#aaa;">${u.id}</td>
       <td><div style="display:flex;align-items:center;gap:10px;">
         <div class="user-avatar-sm ${u.role==='admin'?'admin-av':''}">${initials}</div>
-        <div><div style="font-weight:600;">${esc(u.first_name)} ${esc(u.last_name)}</div></div>
+        <div><div style="font-weight:600;">${esc(u.first_name)} ${esc(u.last_name)}</div>${orgInfo}${isPending?'<span style="font-size:0.68rem;background:#fef9ec;color:#92400e;border:1px solid #fde68a;padding:1px 7px;border-radius:10px;font-weight:700;margin-top:3px;display:inline-block;">PENDING APPROVAL</span>':''}</div>
       </div></td>
       <td style="color:var(--muted);">${esc(u.email)}</td>
-      <td><span class="badge ${u.role}">${u.role}</span></td>
+      <td><span class="badge ${u.role}">${roleLabel}</span></td>
       <td style="color:#888;font-size:0.78rem;">${date}</td>
       <td style="text-align:center;">${u.report_count}</td>
-      <td>
-        ${u.role!=='admin' ? `<button class="act-btn del" onclick="deleteUser(${u.id},'${esc(u.first_name)} ${esc(u.last_name)}')"><i class="fas fa-trash-can"></i> Remove</button>` : '<span style="color:#aaa;font-size:0.78rem;">Protected</span>'}
-      </td>
+      <td><div style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${isPending ? `<button class="act-btn" style="background:#16a34a;color:#fff;border:none;padding:5px 10px;font-size:0.75rem;" onclick="approveUser(${u.id})"><i class="fas fa-check"></i> Approve</button><button class="act-btn del" style="font-size:0.75rem;" onclick="rejectUser(${u.id},'${esc(u.first_name)}')"><i class="fas fa-xmark"></i> Reject</button>` : ''}
+        ${u.role!=='admin'&&!isPending ? `<button class="act-btn del" onclick="deleteUser(${u.id},'${esc(u.first_name)} ${esc(u.last_name)}')"><i class="fas fa-trash-can"></i> Remove</button>` : ''}
+        ${u.role==='admin' ? '<span style="color:#aaa;font-size:0.78rem;">Protected</span>' : ''}
+      </div></td>
     </tr>`;
   }).join('');
+}
+async function approveUser(uid){
+  const fd=new FormData(); fd.append('action','admin_approve_user'); fd.append('user_id',uid);
+  const res=await fetch('api/reports.php',{method:'POST',body:fd});
+  const data=await res.json();
+  if(data.status==='success'){ const u=allUsers.find(x=>x.id==uid); if(u){u.is_approved=1;} renderUsers(); }
+  else alert(data.message||'Failed.');
+}
+async function rejectUser(uid, name){
+  if(!confirm(`Reject and remove account for "${name}"? This cannot be undone.`)) return;
+  const fd=new FormData(); fd.append('action','admin_reject_user'); fd.append('user_id',uid);
+  const res=await fetch('api/reports.php',{method:'POST',body:fd});
+  const data=await res.json();
+  if(data.status==='success'){ allUsers=allUsers.filter(u=>u.id!=uid); renderUsers(); }
+  else alert(data.message||'Failed.');
 }
 async function deleteUser(uid, name){
   if(!confirm(`Remove user "${name}"?\n\nThis will delete their account and all their reports. This cannot be undone.`)) return;
@@ -638,37 +867,107 @@ async function deleteUser(uid, name){
   if(data.status==='success'){
     allUsers=allUsers.filter(u=>u.id!=uid);
     renderUsers();
-    // update stat
     document.querySelector('.stat-num').textContent=allUsers.length;
   } else alert(data.message||'Failed to delete user.');
 }
 document.getElementById('userSearch').addEventListener('input',renderUsers);
 document.getElementById('userRoleFilter').addEventListener('change',renderUsers);
 
+// ── PENDING APPROVALS ─────────────────────────────────────────
+async function loadPending(){
+  pendingLoaded=true;
+  const res=await fetch('api/reports.php?action=admin_get_users');
+  const data=await res.json();
+  document.getElementById('pendingLoading').style.display='none';
+  if(data.status!=='success') return;
+  const pending=data.users.filter(u=>u.is_approved===0 && u.role!=='community' && u.role!=='user' && u.role!=='admin');
+  // Update badge
+  const badge=document.getElementById('pendingNavBadge');
+  const stat=document.getElementById('pendingStatNum');
+  if(stat) stat.textContent=pending.length;
+  if(badge){ if(pending.length>0){badge.textContent=pending.length;badge.style.display='';}else badge.style.display='none'; }
+  if(pending.length===0){ document.getElementById('pendingEmpty').style.display='block'; return; }
+  document.getElementById('pendingTable').style.display='table';
+  document.getElementById('pendingBody').innerHTML=pending.map(u=>{
+    const date=new Date(u.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
+    const initials=(u.first_name[0]||'?').toUpperCase();
+    const roleLabel=u.role.replace('_',' ');
+    const roleBg={'barangay':'#f0fdf4','lgu':'#f0f7ff','first_responder':'#fef2f2'}[u.role]||'#f5f3ff';
+    const roleClr={'barangay':'#166534','lgu':'#0a3d62','first_responder':'#b91c1c'}[u.role]||'#7c3aed';
+    return `<tr id="prow_${u.id}">
+      <td style="color:#aaa;font-size:0.78rem;">${u.id}</td>
+      <td><div style="display:flex;align-items:center;gap:9px;">
+        <div style="width:32px;height:32px;border-radius:50%;background:#f0f7ff;color:#0a3d62;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.82rem;flex-shrink:0;">${initials}</div>
+        <div><div style="font-weight:700;font-size:0.85rem;">${esc(u.first_name)} ${esc(u.last_name)}</div></div>
+      </div></td>
+      <td style="color:var(--muted);font-size:0.82rem;">${esc(u.email)}</td>
+      <td><span style="background:${roleBg};color:${roleClr};padding:3px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;text-transform:capitalize;">${roleLabel}</span></td>
+      <td style="font-size:0.82rem;">${esc(u.org_name||'—')}</td>
+      <td style="font-size:0.82rem;">${esc(u.position||'—')}</td>
+      <td style="font-size:0.82rem;">${esc((u.barangay_name||'')+(u.municipality?', '+u.municipality:''))}</td>
+      <td style="font-size:0.78rem;color:var(--muted);">${date}</td>
+      <td>
+        <div style="display:flex;gap:6px;">
+          <button class="btn-action approve" onclick="approvePending(${u.id})"><i class="fas fa-check"></i> Approve</button>
+          <button class="btn-action" style="background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;" onclick="rejectPending(${u.id},'${esc(u.first_name)}')"><i class="fas fa-xmark"></i> Reject</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+async function approvePending(uid){
+  const fd=new FormData(); fd.append('action','admin_approve_user'); fd.append('user_id',uid);
+  const data=await (await fetch('api/reports.php',{method:'POST',body:fd})).json();
+  if(data.status==='success'){
+    const row=document.getElementById('prow_'+uid); if(row) row.remove();
+    const remaining=document.querySelectorAll('[id^="prow_"]').length;
+    const stat=document.getElementById('pendingStatNum'); if(stat) stat.textContent=remaining;
+    const badge=document.getElementById('pendingNavBadge'); if(badge){ if(remaining>0) badge.textContent=remaining; else badge.style.display='none'; }
+    if(remaining===0){ document.getElementById('pendingTable').style.display='none'; document.getElementById('pendingEmpty').style.display='block'; }
+    // refresh user list if loaded
+    if(allUsers.length>0){ const u=allUsers.find(x=>x.id==uid); if(u) u.is_approved=1; renderUsers(); }
+  } else alert(data.message||'Failed.');
+}
+async function rejectPending(uid,name){
+  if(!confirm('Reject and permanently delete the account for "'+name+'"?')) return;
+  const fd=new FormData(); fd.append('action','admin_reject_user'); fd.append('user_id',uid);
+  const data=await (await fetch('api/reports.php',{method:'POST',body:fd})).json();
+  if(data.status==='success'){
+    const row=document.getElementById('prow_'+uid); if(row) row.remove();
+    const remaining=document.querySelectorAll('[id^="prow_"]').length;
+    const stat=document.getElementById('pendingStatNum'); if(stat) stat.textContent=remaining;
+    const badge=document.getElementById('pendingNavBadge'); if(badge){ if(remaining>0) badge.textContent=remaining; else badge.style.display='none'; }
+    if(remaining===0){ document.getElementById('pendingTable').style.display='none'; document.getElementById('pendingEmpty').style.display='block'; }
+    allUsers=allUsers.filter(u=>u.id!=uid); renderUsers();
+  } else alert(data.message||'Failed.');
+}
+
 // ── POSTS ─────────────────────────────────────────────────────
 async function loadReports(){
-  // If data already cached from overview, just render immediately
-  if(allReports.length > 0){
-    document.getElementById('postsLoading').style.display='none';
-    document.getElementById('postsTable').style.display='table';
-    renderPosts();
-    return;
-  }
-  // Otherwise fetch
   document.getElementById('postsLoading').style.display='block';
   document.getElementById('postsTable').style.display='none';
+  if(allReports.length>0){
+    renderPosts();
+    document.getElementById('postsLoading').style.display='none';
+    document.getElementById('postsTable').style.display='table';
+    return;
+  }
   try {
-    const res  = await fetch('api/reports.php?action=admin_get_reports');
-    const data = await res.json();
+    const res=await fetch('api/reports.php?action=admin_get_reports');
+    const data=await res.json();
     if(data.status==='success'){
-      allReports = data.reports;
+      allReports=data.reports;
       renderPosts();
       document.getElementById('postsLoading').style.display='none';
       document.getElementById('postsTable').style.display='table';
+      return;
     }
-  } catch(e) {
-    document.getElementById('postsLoading').innerHTML='<i class="fas fa-triangle-exclamation"></i> Failed to load posts.';
+  } catch (error) {
+    console.error('Failed to load reports:', error);
   }
+  document.getElementById('postsLoading').style.display='none';
+  document.getElementById('postsTable').style.display='table';
+  document.getElementById('postsBody').innerHTML = '<tr><td colspan="9"><div class="empty"><i class="fas fa-exclamation-triangle"></i><p>Unable to load posts. Please refresh the page.</p></div></td></tr>';
 }
 function renderPosts(){
   const search=document.getElementById('postSearch').value.toLowerCase();
@@ -681,7 +980,12 @@ function renderPosts(){
     return true;
   });
   const body=document.getElementById('postsBody');
-  if(list.length===0){body.innerHTML='<tr><td colspan="9"><div class="empty"><i class="fas fa-binoculars"></i><p>No posts match current filters.</p></div></td></tr>';return;}
+  if(list.length===0){
+    body.innerHTML='<tr><td colspan="9"><div class="empty"><i class="fas fa-binoculars"></i><p>No posts match current filters.</p></div></td></tr>';
+    document.getElementById('postsLoading').style.display='none';
+    document.getElementById('postsTable').style.display='table';
+    return;
+  }
   body.innerHTML=list.map(r=>{
     const arc=r.is_archived==1;
     const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'});
@@ -723,99 +1027,111 @@ document.getElementById('postArchived').addEventListener('change',renderPosts);
 
 // ── LOGS ─────────────────────────────────────────────────────
 async function loadLogs(){
-  const res=await fetch('api/reports.php?action=admin_get_logs');
-  const data=await res.json();
-  if(data.status==='success'){
-    allLogs=data.logs;
-    const body=document.getElementById('logsBody');
-    body.innerHTML=allLogs.map(l=>{
-      const date=new Date(l.created_at).toLocaleString('en-PH');
-      const ok=l.status==='Success';
-      return `<tr>
-        <td style="color:#aaa;">${l.id}</td>
-        <td style="font-weight:500;">${esc(l.email)}</td>
-        <td><span class="badge ${ok?'safe':'dangerous'}">${ok?'✓ Success':'✗ Failed'}</span></td>
-        <td style="color:var(--muted);font-size:0.8rem;">${esc(l.ip_address||'—')}</td>
-        <td style="color:var(--muted);font-size:0.75rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(l.device||'')}">
-          ${(l.device||'—').substring(0,40)}${l.device?.length>40?'…':''}
-        </td>
-        <td style="color:#888;font-size:0.78rem;white-space:nowrap;">${date}</td>
-      </tr>`;
-    }).join('');
-    document.getElementById('logsLoading').style.display='none';
-    document.getElementById('logsTable').style.display='table';
-  }
-}
-
-  // ── AUDIT LOG ────────────────────────────────────────────────
-let allAuditLogs = [];
-
-async function loadAuditLogs(){
-  if(allAuditLogs.length > 0){ renderAudit(); return; }
-  document.getElementById('auditLoading').style.display='block';
-  document.getElementById('auditTable').style.display='none';
-  try {
-    const res  = await fetch('api/reports.php?action=admin_get_audit_logs');
-    const data = await res.json();
+  currentLogsPage = 1;
+  document.getElementById('logsLoading').style.display='block';
+  document.getElementById('logsTable').style.display='none';
+  document.getElementById('logsPaginationContainer').style.display='none';
+  
+  try{
+    const res=await fetch('api/reports.php?action=admin_get_logs');
+    const data=await res.json();
     if(data.status==='success'){
-      allAuditLogs = data.logs;
-      renderAudit();
-      document.getElementById('auditLoading').style.display='none';
-      document.getElementById('auditTable').style.display='table';
+      allLogs=data.logs;
+      renderLogs();
     }
-  } catch(e) {
-    document.getElementById('auditLoading').innerHTML='<i class="fas fa-triangle-exclamation"></i> Failed to load audit log.';
+  }catch(e){
+    console.error('Logs load error',e);
   }
+  
+  document.getElementById('logsLoading').style.display='none';
+  document.getElementById('logsTable').style.display='table';
 }
 
-function renderAudit(){
-  const search = document.getElementById('auditSearch').value.toLowerCase();
-  const action = document.getElementById('auditAction').value;
-  let list = allAuditLogs.filter(l => {
-    if(action && l.action !== action) return false;
-    if(search){
-      const hay = (l.report_title + l.performed_by_name).toLowerCase();
-      if(!hay.includes(search)) return false;
-    }
-    return true;
-  });
-  const body = document.getElementById('auditBody');
-  if(!list.length){
-    body.innerHTML='<tr><td colspan="5"><div class="empty"><i class="fas fa-clipboard-check"></i><p>No audit entries found.</p></div></td></tr>';
+function renderLogs(){
+  if(allLogs.length===0){
+    document.getElementById('logsBody').innerHTML='<tr><td colspan="6" class="empty"><i class="fas fa-inbox"></i><p>No login logs available.</p></td></tr>';
+    document.getElementById('logsPaginationContainer').style.display='none';
     return;
   }
-  const actionStyles = {
-    archived: 'background:#fff0f0;color:var(--red);',
-    restored: 'background:#f0fff4;color:var(--green);',
-  };
-  const actionIcons = {
-    archived: 'fa-archive',
-    restored: 'fa-rotate-left',
-  };
-  body.innerHTML = list.map((l,i) => {
-    const date = new Date(l.performed_at).toLocaleString('en-PH');
-    const style = actionStyles[l.action] || 'background:#f0f2f7;color:#555;';
-    const icon  = actionIcons[l.action]  || 'fa-circle-info';
+  
+  const totalPages = Math.ceil(allLogs.length / logsItemsPerPage);
+  if(currentLogsPage > totalPages) currentLogsPage = totalPages;
+  if(currentLogsPage < 1) currentLogsPage = 1;
+  
+  const start = (currentLogsPage - 1) * logsItemsPerPage;
+  const end = start + logsItemsPerPage;
+  const pageData = allLogs.slice(start, end);
+  
+  const body = document.getElementById('logsBody');
+  body.innerHTML = pageData.map((l, i) => {
+    const date = new Date(l.created_at).toLocaleString('en-PH');
+    const ok = l.status === 'Success';
+    const globalIndex = start + i + 1;
     return `<tr>
-      <td style="color:#aaa;">${l.id}</td>
-      <td>
-        <div style="font-weight:600;">${esc(l.report_title)}</div>
-        <small style="color:#aaa;">Report #${l.report_id}</small>
+      <td style="color:#aaa;">${globalIndex}</td>
+      <td style="font-weight:500;">${esc(l.email)}</td>
+      <td><span class="badge ${ok?'safe':'dangerous'}">${ok?'✓ Success':'✗ Failed'}</span></td>
+      <td style="color:var(--muted);font-size:0.8rem;">${esc(l.ip_address||'—')}</td>
+      <td style="color:var(--muted);font-size:0.75rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(l.device||'')}">
+        ${(l.device||'—').substring(0,40)}${l.device?.length>40?'…':''}
       </td>
-      <td>
-        <span style="padding:3px 10px;border-radius:50px;font-size:0.72rem;font-weight:700;${style}">
-          <i class="fas ${icon}" style="margin-right:4px;"></i>${l.action.toUpperCase()}
-        </span>
-      </td>
-      <td style="font-weight:500;">${esc(l.performed_by_name)}</td>
       <td style="color:#888;font-size:0.78rem;white-space:nowrap;">${date}</td>
     </tr>`;
   }).join('');
+  
+  renderLogsPagination(totalPages, allLogs.length);
 }
 
-document.getElementById('auditSearch').addEventListener('input', renderAudit);
-document.getElementById('auditAction').addEventListener('change', renderAudit);
+function renderLogsPagination(totalPages, totalItems){
+  const container = document.getElementById('logsPaginationContainer');
+  if(!container) return;
+  
+  if(totalPages <= 1){
+    container.style.display='none';
+    return;
+  }
+  
+  container.style.display='flex';
+  let pageLinks = [];
+  if(totalPages <= 5){
+    pageLinks = Array.from({ length: totalPages }, (_, i) => i + 1);
+  } else {
+    pageLinks.push(1);
+    if(currentLogsPage > 3) pageLinks.push('...');
+    for(let i = Math.max(2, currentLogsPage - 1); i <= Math.min(totalPages - 1, currentLogsPage + 1); i++){
+      if(!pageLinks.includes(i)) pageLinks.push(i);
+    }
+    if(currentLogsPage < totalPages - 2) pageLinks.push('...');
+    pageLinks.push(totalPages);
+  }
+  
+  const paginationHtml = `
+    <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;">
+      <button class="btn-action" onclick="goToLogsPage(1)" title="First page" style="padding:8px 10px;font-size:0.8rem;" ${currentLogsPage === 1 ? 'disabled' : ''}><i class="fas fa-angles-left"></i></button>
+      <button class="btn-action" onclick="goToLogsPage(${currentLogsPage - 1})" title="Previous page" style="padding:8px 10px;font-size:0.8rem;" ${currentLogsPage === 1 ? 'disabled' : ''}><i class="fas fa-angle-left"></i></button>
+      
+      <div style="display:flex;gap:4px;align-items:center;">
+        ${pageLinks.map(page => {
+          if(page === '...') return `<span style="color:var(--muted);">...</span>`;
+          return `<button class="btn-action" onclick="goToLogsPage(${page})" style="padding:6px 10px;font-size:0.8rem;${currentLogsPage === page ? 'background:var(--blue);color:#fff;' : ''}">${page}</button>`;
+        }).join('')}
+      </div>
+      
+      <button class="btn-action" onclick="goToLogsPage(${currentLogsPage + 1})" title="Next page" style="padding:8px 10px;font-size:0.8rem;" ${currentLogsPage === totalPages ? 'disabled' : ''}><i class="fas fa-angle-right"></i></button>
+      <button class="btn-action" onclick="goToLogsPage(${totalPages})" title="Last page" style="padding:8px 10px;font-size:0.8rem;" ${currentLogsPage === totalPages ? 'disabled' : ''}><i class="fas fa-angles-right"></i></button>
+      
+      <span style="color:var(--muted);font-size:0.85rem;margin-left:12px;white-space:nowrap;">Page ${currentLogsPage} of ${totalPages} (${totalItems} total)</span>
+    </div>
+  `;
+  container.innerHTML = paginationHtml;
+}
 
+function goToLogsPage(page){
+  currentLogsPage = page;
+  renderLogs();
+  const table = document.getElementById('logsTable');
+  if(table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
 function esc(s){if(!s)return'';return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
@@ -903,6 +1219,58 @@ function closeContactModal(){
   document.getElementById('contactModalOverlay').style.display='none';
 }
 
+function openDeleteModal(flagId, email) {
+  const msg = email ?
+    `Are you sure you want to delete the flagged account entry for ${email}? This action cannot be undone.` :
+    'Are you sure you want to delete this flagged account entry? This action cannot be undone.';
+  document.getElementById('deleteModalMessage').textContent = msg;
+  document.getElementById('confirmDeleteBtn').dataset.flagId = flagId;
+  document.getElementById('deleteModalOverlay').style.display = 'flex';
+}
+
+function closeDeleteModal(){
+  document.getElementById('deleteModalOverlay').style.display='none';
+  document.getElementById('confirmDeleteBtn').dataset.flagId = '';
+}
+
+async function confirmDeleteFlag() {
+  const button = document.getElementById('confirmDeleteBtn');
+  const flagId = button.dataset.flagId;
+  if (!flagId) return;
+
+  button.disabled = true;
+  button.textContent = 'Deleting...';
+
+  try {
+    const fd = new FormData();
+    fd.append('action', 'delete_flag');
+    fd.append('flag_id', flagId);
+
+    const res = await fetch('api/security.php', {
+      method: 'POST',
+      body: fd
+    });
+    const data = await res.json();
+
+    if (data.status === 'success') {
+      closeDeleteModal();
+      await loadSecurityMonitor();
+    } else {
+      alert(data.message || 'Failed to delete the entry.');
+    }
+  } catch (e) {
+    console.error(e);
+    alert('Unable to delete entry. Please try again.');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Delete';
+  }
+}
+
+function deleteFlag(flagId, email){
+  openDeleteModal(flagId, email);
+}
+
 function editContact(id){
   const c = allContacts.find(x=>x.id===id);
   if(c) openContactModal(c);
@@ -962,8 +1330,393 @@ document.getElementById('contactModalOverlay').addEventListener('click', functio
   if(e.target===this) closeContactModal();
 });
 
+document.getElementById('deleteModalOverlay').addEventListener('click', function(e){
+  if(e.target===this) closeDeleteModal();
+});
+
 // ── INIT ─────────────────────────────────────────────────────
 loadOverview();
+loadPending();
+
+// ── AUDIT LOG ─────────────────────────────────────────────────────────────
+let allAuditLogs = [];
+
+async function loadAuditLogs(){
+  if(allAuditLogs.length > 0){ renderAudit(); return; }
+  document.getElementById('auditLoading').style.display='block';
+  document.getElementById('auditTable').style.display='none';
+  try {
+    const res  = await fetch('api/reports.php?action=admin_get_audit_logs');
+    const data = await res.json();
+    if(data.status==='success'){
+      allAuditLogs = data.logs;
+      renderAudit();
+      document.getElementById('auditLoading').style.display='none';
+      document.getElementById('auditTable').style.display='table';
+    }
+  } catch(e) {
+    document.getElementById('auditLoading').innerHTML='<i class="fas fa-triangle-exclamation"></i> Failed to load audit log.';
+  }
+}
+
+function renderAudit(){
+  const search = document.getElementById('auditSearch').value.toLowerCase();
+  const action = document.getElementById('auditAction').value;
+  let list = allAuditLogs.filter(l => {
+    if(action && l.action !== action) return false;
+    if(search){ const hay=(l.report_title+l.performed_by_name).toLowerCase(); if(!hay.includes(search)) return false; }
+    return true;
+  });
+  const body = document.getElementById('auditBody');
+  if(!list.length){ body.innerHTML='<tr><td colspan="5"><div class="empty"><i class="fas fa-clipboard-check"></i><p>No audit entries found.</p></div></td></tr>'; return; }
+  const actionStyles={archived:'background:#fff0f0;color:var(--red);',restored:'background:#f0fff4;color:var(--green);'};
+  const actionIcons={archived:'fa-archive',restored:'fa-rotate-left'};
+  body.innerHTML=list.map((l,i)=>{
+    const date=new Date(l.performed_at).toLocaleString('en-PH');
+    const style=actionStyles[l.action]||'background:#f0f2f7;color:#555;';
+    const icon=actionIcons[l.action]||'fa-circle-info';
+    return `<tr>
+      <td style="color:#aaa;">${l.id}</td>
+      <td><div style="font-weight:600;">${esc(l.report_title)}</div><small style="color:#aaa;">Report #${l.report_id}</small></td>
+      <td><span style="padding:3px 10px;border-radius:50px;font-size:0.72rem;font-weight:700;${style}"><i class="fas ${icon}" style="margin-right:4px;"></i>${l.action.toUpperCase()}</span></td>
+      <td style="font-weight:500;">${esc(l.performed_by_name)}</td>
+      <td style="color:#888;font-size:0.78rem;white-space:nowrap;">${date}</td>
+    </tr>`;
+  }).join('');
+}
+document.addEventListener('DOMContentLoaded',()=>{
+  const as=document.getElementById('auditSearch'); if(as) as.addEventListener('input',renderAudit);
+  const aa=document.getElementById('auditAction'); if(aa) aa.addEventListener('change',renderAudit);
+  const ss=document.getElementById('securitySearch'); if(ss) ss.addEventListener('input',()=>{ renderSecurityTable(); updateSecuritySelectionSummary(); });
+  const rf=document.getElementById('riskFilter'); if(rf) rf.addEventListener('change',()=>{ renderSecurityTable(); updateSecuritySelectionSummary(); });
+});
+
+// ── SECURITY MONITOR ─────────────────────────────────────────
+let allSecurityData = [];
+let selectedSecurityFlags = new Set();
+let currentSecurityPage = 1;
+const securityItemsPerPage = 10;
+
+async function loadSecurityMonitor() {
+  currentSecurityPage = 1;
+  document.getElementById('securityLoading').style.display = 'block';
+  document.getElementById('securityTable').style.display = 'none';
+
+  try {
+    const res = await fetch('api/security.php?action=get_flagged');
+    const data = await res.json();
+
+    if (data.status === 'success') {
+      allSecurityData = data.data;
+
+      const high = allSecurityData.filter(r => r.risk_level === 'high').length;
+      const medium = allSecurityData.filter(r => r.risk_level === 'medium').length;
+
+      document.getElementById('highRiskCount').textContent = high;
+      document.getElementById('mediumRiskCount').textContent = medium;
+      document.getElementById('totalFlagged').textContent = allSecurityData.length;
+
+      renderSecurityTable();
+    }
+  } catch (e) {
+    console.error(e);
+  }
+
+  document.getElementById('securityLoading').style.display = 'none';
+  document.getElementById('securityTable').style.display = 'table';
+}
+
+function renderSecurityTable() {
+  const search = (document.getElementById('securitySearch').value || '').toLowerCase();
+  const riskFilter = document.getElementById('riskFilter').value;
+
+  let filtered = allSecurityData.filter(row => {
+    if (riskFilter && row.risk_level !== riskFilter) return false;
+    if (search) {
+      const hay = (row.email + ' ' + row.ip_address).toLowerCase();
+      return hay.includes(search);
+    }
+    return true;
+  });
+
+  const body = document.getElementById('securityBody');
+  if (filtered.length === 0) {
+    body.innerHTML = `<tr><td colspan="9" class="empty"><i class="fas fa-shield-halved"></i><p>No flagged attempts found.</p></td></tr>`;
+    document.getElementById('securityPaginationContainer').style.display = 'none';
+    updateSecuritySelectionSummary();
+    return;
+  }
+
+  const totalPages = Math.ceil(filtered.length / securityItemsPerPage);
+  if (currentSecurityPage > totalPages) currentSecurityPage = totalPages;
+  if (currentSecurityPage < 1) currentSecurityPage = 1;
+
+  const start = (currentSecurityPage - 1) * securityItemsPerPage;
+  const end = start + securityItemsPerPage;
+  const pageData = filtered.slice(start, end);
+
+  body.innerHTML = pageData.map((row, i) => {
+    const isSelected = selectedSecurityFlags.has(row.flag_id);
+    const riskClass = row.risk_level === 'high' ? 'badge dangerous' : 
+                     (row.risk_level === 'medium' ? 'badge caution' : 'badge safe');
+    const globalIndex = start + i + 1;
+
+    return `
+      <tr>
+        <td><input type="checkbox" class="security-row-checkbox" data-flag-id="${row.flag_id}" onchange="toggleSecuritySelect(${row.flag_id}, this.checked)" ${isSelected ? 'checked' : ''}></td>
+        <td>${globalIndex}</td>
+        <td><strong>${esc(row.email || 'Unknown')}</strong></td>
+        <td style="font-family:monospace;">${esc(row.ip_address)}</td>
+        <td><strong>${row.failed_count || row.recent_failed || 0}</strong></td>
+        <td><span class="${riskClass}">${(row.risk_level || 'normal').toUpperCase()}</span></td>
+        <td style="color:#888;font-size:0.78rem;">${row.last_attempt}</td>
+        <td><span class="badge ${row.reviewed ? 'archived' : 'dangerous'}">${row.reviewed ? 'Reviewed' : 'Flagged'}</span></td>
+        <td>
+          ${!row.reviewed ? `<button class="act-btn" style="background:#16a34a;color:#fff;" onclick="markReviewed(${row.flag_id})"><i class="fas fa-check"></i> Reviewed</button>` : ''}
+          <button class="act-btn del" onclick="deleteFlag(${row.flag_id}, '${(row.email||'').replace(/'/g,"\\'")}')"><i class="fas fa-trash"></i></button>
+        </td>
+      </tr>`;
+  }).join('');
+
+  renderSecurityPagination(totalPages, filtered.length);
+  updateSecuritySelectionSummary();
+}
+
+function renderSecurityPagination(totalPages, totalItems) {
+  const container = document.getElementById('securityPaginationContainer');
+  if (!container) return;
+
+  if (totalPages <= 1) {
+    container.style.display = 'none';
+    return;
+  }
+
+  container.style.display = 'flex';
+  let pageLinks = [];
+  if (totalPages <= 5) {
+    pageLinks = Array.from({ length: totalPages }, (_, i) => i + 1);
+  } else {
+    pageLinks.push(1);
+    if (currentSecurityPage > 3) pageLinks.push('...');
+    for (let i = Math.max(2, currentSecurityPage - 1); i <= Math.min(totalPages - 1, currentSecurityPage + 1); i++) {
+      if (!pageLinks.includes(i)) pageLinks.push(i);
+    }
+    if (currentSecurityPage < totalPages - 2) pageLinks.push('...');
+    pageLinks.push(totalPages);
+  }
+
+  const paginationHtml = `
+    <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;">
+      <button class="btn-action" onclick="goToSecurityPage(1)" title="First page" style="padding:8px 10px;font-size:0.8rem;" ${currentSecurityPage === 1 ? 'disabled' : ''}><i class="fas fa-angles-left"></i></button>
+      <button class="btn-action" onclick="goToSecurityPage(${currentSecurityPage - 1})" title="Previous page" style="padding:8px 10px;font-size:0.8rem;" ${currentSecurityPage === 1 ? 'disabled' : ''}><i class="fas fa-angle-left"></i></button>
+      
+      <div style="display:flex;gap:4px;align-items:center;">
+        ${pageLinks.map(page => {
+          if (page === '...') return `<span style="color:var(--muted);">...</span>`;
+          return `<button class="btn-action" onclick="goToSecurityPage(${page})" style="padding:6px 10px;font-size:0.8rem;${currentSecurityPage === page ? 'background:var(--blue);color:#fff;' : ''}">${page}</button>`;
+        }).join('')}
+      </div>
+      
+      <button class="btn-action" onclick="goToSecurityPage(${currentSecurityPage + 1})" title="Next page" style="padding:8px 10px;font-size:0.8rem;" ${currentSecurityPage === totalPages ? 'disabled' : ''}><i class="fas fa-angle-right"></i></button>
+      <button class="btn-action" onclick="goToSecurityPage(${totalPages})" title="Last page" style="padding:8px 10px;font-size:0.8rem;" ${currentSecurityPage === totalPages ? 'disabled' : ''}><i class="fas fa-angles-right"></i></button>
+      
+      <span style="color:var(--muted);font-size:0.85rem;margin-left:12px;white-space:nowrap;">Page ${currentSecurityPage} of ${totalPages} (${totalItems} total)</span>
+    </div>
+  `;
+  container.innerHTML = paginationHtml;
+}
+
+function goToSecurityPage(page) {
+  currentSecurityPage = page;
+  renderSecurityTable();
+  const table = document.getElementById('securityTable');
+  if (table) table.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function updateSecuritySelectionSummary() {
+  const total = allSecurityData.length;
+  const selected = selectedSecurityFlags.size;
+  const summary = document.getElementById('securitySelectionSummary');
+  if (summary) {
+    summary.textContent = `Selected ${selected} of ${total} flagged accounts`;
+  }
+  const deleteBtn = document.getElementById('deleteSelectedFlagsBtn');
+  if (deleteBtn) deleteBtn.disabled = selected === 0;
+  const selectAll = document.getElementById('securitySelectAll');
+  if (selectAll) {
+    const visible = Array.from(document.querySelectorAll('#securityBody input.security-row-checkbox'));
+    selectAll.checked = visible.length > 0 && visible.every(cb => cb.checked);
+  }
+}
+
+function toggleSecuritySelectAll(checkbox) {
+  const checked = checkbox.checked;
+  document.querySelectorAll('#securityBody input.security-row-checkbox').forEach(input => {
+    input.checked = checked;
+    const id = parseInt(input.dataset.flagId, 10);
+    if (checked) selectedSecurityFlags.add(id);
+    else selectedSecurityFlags.delete(id);
+  });
+  updateSecuritySelectionSummary();
+}
+
+function toggleSecuritySelect(flagId, checked) {
+  if (checked) selectedSecurityFlags.add(flagId);
+  else selectedSecurityFlags.delete(flagId);
+  updateSecuritySelectionSummary();
+}
+
+async function deleteSelectedFlags() {
+  const ids = Array.from(selectedSecurityFlags);
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} selected flagged account entries? This cannot be undone.`)) return;
+  await sendDeleteFlags(ids);
+}
+
+async function deleteAllFlagged() {
+  const ids = allSecurityData.map(row => row.flag_id);
+  if (!ids.length) return;
+  if (!confirm(`Delete all ${ids.length} flagged account entries? This cannot be undone.`)) return;
+  await sendDeleteFlags(ids);
+}
+
+async function sendDeleteFlags(flagIds) {
+  const button = document.getElementById('deleteSelectedFlagsBtn');
+  if (button) { button.disabled = true; button.textContent = 'Deleting...'; }
+  try {
+    const fd = new FormData();
+    fd.append('action', 'delete_flags');
+    fd.append('flag_ids', JSON.stringify(flagIds));
+
+    const res = await fetch('api/security.php', {
+      method: 'POST',
+      body: fd
+    });
+    const data = await res.json();
+
+    if (data.status === 'success') {
+      selectedSecurityFlags.clear();
+      await loadSecurityMonitor();
+    } else {
+      alert(data.message || 'Failed to delete flagged entries.');
+    }
+  } catch (e) {
+    console.error(e);
+    alert('Unable to delete flagged entries. Please try again.');
+  } finally {
+    if (button) { button.disabled = false; button.innerHTML = '<i class="fas fa-trash"></i> Delete Selected'; }
+  }
+}
+
+function renderVulnerabilities() {
+  const latest = allSecurityScans[0] || null;
+  document.getElementById('lastScanDate').textContent = latest ? latest.scanned_at : 'Never';
+  document.getElementById('vulnerabilityScore').textContent = latest ? `${latest.score}/100` : '0/100';
+
+  const statusMap = {
+    passed: {label:'Passed', cls:'passed'},
+    warning: {label:'Warning', cls:'warning'},
+    critical: {label:'Critical', cls:'critical'},
+  };
+
+  const cardKeyMap = {
+    https: 'vulnCardHttps',
+    session: 'vulnCardSession',
+    password_hash: 'vulnCardPassword',
+    security_headers: 'vulnCardHeaders',
+    upload_restrictions: 'vulnCardUpload',
+  };
+
+  Object.entries(cardKeyMap).forEach(([key, cardId]) => {
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    let result = { status: 'warning', detail: 'No scan result available.' };
+    if (latest && latest[key]) result = latest[key];
+    const status = statusMap[result.status] || statusMap.warning;
+    card.querySelector('.vuln-status').textContent = status.label;
+    card.querySelector('.vuln-status').className = 'vuln-status ' + status.cls;
+    card.querySelector('.vuln-detail').textContent = result.detail || 'No detail available.';
+  });
+
+  const historyBody = document.getElementById('vulnHistoryBody');
+  const historyTable = document.getElementById('vulnHistoryTable');
+  const historyLoading = document.getElementById('vulnHistoryLoading');
+
+  if (allSecurityScans.length === 0) {
+    historyBody.innerHTML = '<tr><td colspan="8" class="empty"><i class="fas fa-search"></i><p>No vulnerability scans have been run yet.</p></td></tr>';
+    historyTable.style.display = 'table';
+    historyLoading.style.display = 'none';
+    return;
+  }
+
+  historyBody.innerHTML = allSecurityScans.map((scan, idx) => {
+    const statusRow = scan;
+    return `
+      <tr>
+        <td>${idx+1}</td>
+        <td>${scan.scanned_at}</td>
+        <td><strong>${scan.score}/100</strong></td>
+        <td><span class="badge ${statusMap[statusRow.https_status].cls}">${statusMap[statusRow.https_status].label}</span></td>
+        <td><span class="badge ${statusMap[statusRow.session_status].cls}">${statusMap[statusRow.session_status].label}</span></td>
+        <td><span class="badge ${statusMap[statusRow.password_hash_status].cls}">${statusMap[statusRow.password_hash_status].label}</span></td>
+        <td><span class="badge ${statusMap[statusRow.security_headers_status].cls}">${statusMap[statusRow.security_headers_status].label}</span></td>
+        <td><span class="badge ${statusMap[statusRow.upload_restrictions_status].cls}">${statusMap[statusRow.upload_restrictions_status].label}</span></td>
+      </tr>`;
+  }).join('');
+  historyTable.style.display = 'table';
+  historyLoading.style.display = 'none';
+}
+
+async function loadVulnerabilities() {
+  document.getElementById('vulnHistoryLoading').style.display = 'block';
+  document.getElementById('vulnHistoryTable').style.display = 'none';
+  try {
+    const res = await fetch('api/security.php?action=security_history');
+    const data = await res.json();
+    if (data.status === 'success') {
+      allSecurityScans = data.history.map(item => ({
+        ...item,
+        score: parseInt(item.score, 10),
+      }));
+      renderVulnerabilities();
+      return;
+    }
+  } catch (error) {
+    console.error('Vulnerability history load failed:', error);
+  }
+  document.getElementById('vulnHistoryLoading').style.display = 'none';
+  document.getElementById('vulnHistoryTable').style.display = 'table';
+}
+
+function openVulnerabilityModal() {
+  document.getElementById('vulnerabilityModalOverlay').style.display = 'flex';
+  loadVulnerabilities();
+}
+
+function closeVulnerabilityModal() {
+  document.getElementById('vulnerabilityModalOverlay').style.display = 'none';
+}
+
+async function runVulnerabilityAssessment() {
+  const button = document.querySelector('#vulnerabilityModalOverlay .btn-action.approve');
+  if (button) { button.disabled = true; button.textContent = 'Running...'; }
+  try {
+    const res = await fetch('api/security.php?action=run_security_scan', { method: 'POST' });
+    const data = await res.json();
+    if (data.status === 'success' && data.scan) {
+      allSecurityScans.unshift(data.scan);
+      renderVulnerabilities();
+    } else {
+      alert(data.message || 'Assessment failed.');
+    }
+  } catch (error) {
+    console.error('Vulnerability assessment failed:', error);
+    alert('Unable to run the assessment. Check console for details.');
+  }
+  if (button) { button.disabled = false; button.innerHTML = '<i class="fas fa-play"></i> Run Assessment'; }
+}
+
 </script>
 </body>
 </html>
+

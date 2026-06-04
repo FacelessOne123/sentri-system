@@ -3,10 +3,99 @@
  * SenTriMailer – Minimal Gmail SMTP mailer (no Composer/PHPMailer required)
  * Uses PHP's built-in stream_socket_client + STARTTLS for Gmail App Password auth.
  *
- * Configuration: edit email_config.php – never put credentials directly here.
+ * Configuration: edit config/email.php – never put credentials directly here.
  */
 
 require_once __DIR__ . '/../config/email.php';
+
+// ── Dynamic APP_URL detection ─────────────────────────────────────────────────
+// If APP_URL is still the default placeholder ("http://localhost"), auto-detect
+// the real base URL from the live HTTP request so verification and password-reset
+// links work correctly on:
+//   • localhost with a custom port  (e.g. http://localhost:8080/sentri-system)
+//   • a live domain root            (e.g. https://sentri.example.com)
+//   • a live domain in a subdir     (e.g. https://example.com/sentri)
+//   • behind a reverse proxy        (reads X-Forwarded-Proto / X-Forwarded-Host)
+//
+// To pin a specific URL, just set APP_URL to something other than "http://localhost"
+// in config/email.php and this entire block is skipped.
+if (!defined('APP_URL') || APP_URL === 'http://localhost' || APP_URL === 'http://localhost/' || APP_URL === '') {
+    $sentri_detected = sentri_detect_app_url();
+    if (!defined('APP_URL')) {
+        define('APP_URL', $sentri_detected);
+    } else {
+        // PHP does not allow re-defining constants; store the override in a global
+        // that sentri_app_url() prefers over the constant.
+        $GLOBALS['_sentri_app_url_override'] = $sentri_detected;
+    }
+}
+
+/**
+ * Returns the effective application base URL at runtime.
+ * Always use this instead of the APP_URL constant directly.
+ */
+function sentri_app_url(): string
+{
+    if (!empty($GLOBALS['_sentri_app_url_override'])) {
+        return rtrim($GLOBALS['_sentri_app_url_override'], '/');
+    }
+    return defined('APP_URL') ? rtrim(APP_URL, '/') : 'http://localhost';
+}
+
+/**
+ * Auto-detects the application base URL from the current HTTP request.
+ *
+ * Detection order:
+ *  1. X-Forwarded-Proto / X-Forwarded-Host   (reverse proxies / load balancers)
+ *  2. HTTPS server variable                  (Apache/Nginx direct HTTPS)
+ *  3. HTTP_HOST                              (includes non-standard port automatically)
+ *  4. SERVER_NAME + SERVER_PORT fallback
+ *
+ * @return string  Base URL with no trailing slash, e.g. "https://example.com/sentri"
+ */
+function sentri_detect_app_url(): string
+{
+    // ── Scheme ───────────────────────────────────────────────────────────────
+    $scheme = 'http';
+    if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO'])) {
+        $scheme = strtolower(trim(explode(',', $_SERVER['HTTP_X_FORWARDED_PROTO'])[0]));
+    } elseif (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+        $scheme = 'https';
+    } elseif (!empty($_SERVER['REQUEST_SCHEME'])) {
+        $scheme = $_SERVER['REQUEST_SCHEME'];
+    } elseif (!empty($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443) {
+        $scheme = 'https';
+    }
+
+    // ── Host (RFC 7230 §5.4: HTTP_HOST already includes ":port" when non-standard) ──
+    if (!empty($_SERVER['HTTP_X_FORWARDED_HOST'])) {
+        $host = trim(explode(',', $_SERVER['HTTP_X_FORWARDED_HOST'])[0]);
+    } elseif (!empty($_SERVER['HTTP_HOST'])) {
+        $host = $_SERVER['HTTP_HOST'];           // e.g. "localhost:8080" or "mysite.com"
+    } else {
+        $port = (int)($_SERVER['SERVER_PORT'] ?? 80);
+        $host = $_SERVER['SERVER_NAME'] ?? 'localhost';
+        if (($scheme === 'http' && $port !== 80) || ($scheme === 'https' && $port !== 443)) {
+            $host .= ':' . $port;
+        }
+    }
+
+    // ── Sub-directory path ────────────────────────────────────────────────────
+    // __FILE__  →  <project_root>/core/SenTriMailer.php
+    // dirname(__DIR__)  →  <project_root>
+    $docRoot  = rtrim($_SERVER['DOCUMENT_ROOT'] ?? '', '/');
+    $projRoot = rtrim(dirname(__DIR__), '/');
+
+    $subPath = '';
+    if ($docRoot !== '' && strpos($projRoot, $docRoot) === 0) {
+        $subPath = substr($projRoot, strlen($docRoot));
+        $subPath = str_replace('\\', '/', $subPath);   // Windows path separator fix
+    }
+
+    return rtrim($scheme . '://' . $host . $subPath, '/');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 class SenTriMailer
 {
@@ -71,7 +160,6 @@ class SenTriMailer
     private function startTLS(): void
     {
         $this->cmd('STARTTLS', '220', 'STARTTLS');
-        // Upgrade plain TCP to TLS
         if (!stream_socket_enable_crypto($this->socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
             throw new RuntimeException('STARTTLS crypto handshake failed.');
         }
@@ -79,7 +167,6 @@ class SenTriMailer
 
     private function ehloAgain(): void
     {
-        // Must re-send EHLO after TLS upgrade
         $this->cmd('EHLO localhost', '250', 'EHLO-TLS');
     }
 
@@ -103,8 +190,8 @@ class SenTriMailer
     private function data(string $toEmail, string $toName, string $subject, string $htmlBody): void
     {
         $this->cmd('DATA', '354', 'DATA init');
-        $msgId  = '<' . time() . '.' . bin2hex(random_bytes(8)) . '@sentri>';
-        $date   = date('r');
+        $msgId    = '<' . time() . '.' . bin2hex(random_bytes(8)) . '@sentri>';
+        $date     = date('r');
         $fromLine = MAIL_FROM_NAME . ' <' . MAIL_FROM . '>';
         $toLne    = $toName ? "$toName <$toEmail>" : $toEmail;
 
@@ -118,7 +205,6 @@ class SenTriMailer
         $msg .= "Date: $date\r\n";
         $msg .= "\r\n";
         $msg .= quoted_printable_encode($htmlBody);
-        // Dot-stuffing: lone dots on a line must be doubled
         $msg  = str_replace("\r\n.", "\r\n..", $msg);
         $msg .= "\r\n.";
 
@@ -151,7 +237,6 @@ class SenTriMailer
         $response = '';
         while (($line = fgets($this->socket, 515)) !== false) {
             $response .= $line;
-            // A line like "250 " (space after code) or "250-" (dash = more lines follow)
             if (strlen($line) >= 4 && $line[3] === ' ') {
                 break;
             }
@@ -166,7 +251,6 @@ class SenTriMailer
 
     private function encodeHeader(string $str): string
     {
-        // RFC 2047 Base64 encoding for non-ASCII subject lines
         if (preg_match('/[^\x20-\x7E]/', $str)) {
             return '=?UTF-8?B?' . base64_encode($str) . '?=';
         }
@@ -175,25 +259,27 @@ class SenTriMailer
 }
 
 
-// ── Convenience functions (used by signup.php, etc.) ─────────────────────────
+// ── Convenience functions (called by signup.php, forgot_password.php, etc.) ───
 
 /**
  * Send an account verification email.
+ *
+ * Uses sentri_app_url() so the link is always correct regardless of
+ * how/where the application is hosted (port, domain, subdirectory).
  */
 function sendVerificationEmail(string $toEmail, string $toName, string $token): bool
 {
-    $link = APP_URL . '/verify_email.php?token=' . urlencode($token);
-    $subject = 'Verify your SenTri account';
+    $link = sentri_app_url() . '/verify_email.php?token=' . urlencode($token);
     $html = buildEmailTemplate(
         'Verify Your Email',
         "Hi $toName,",
-        "Thanks for signing up for SenTri! Please click the button below to verify your email address and activate your account.",
+        'Thanks for signing up for SenTri! Please click the button below to verify your email address and activate your account.',
         $link,
         'Verify My Account',
         'This link expires in <strong>24 hours</strong>. If you did not create a SenTri account, you can safely ignore this email.'
     );
     $mailer = new SenTriMailer();
-    return $mailer->send($toEmail, $toName, $subject, $html);
+    return $mailer->send($toEmail, $toName, 'Verify your SenTri account', $html);
 }
 
 /**
@@ -201,18 +287,17 @@ function sendVerificationEmail(string $toEmail, string $toName, string $token): 
  */
 function sendPasswordResetEmail(string $toEmail, string $toName, string $token): bool
 {
-    $link = APP_URL . '/reset_password.php?token=' . urlencode($token);
-    $subject = 'Reset your SenTri password';
+    $link = sentri_app_url() . '/reset_password.php?token=' . urlencode($token);
     $html = buildEmailTemplate(
         'Reset Your Password',
         "Hi $toName,",
-        "We received a request to reset the password for your SenTri account. Click the button below to choose a new password.",
+        'We received a request to reset the password for your SenTri account. Click the button below to choose a new password.',
         $link,
         'Reset My Password',
         'This link expires in <strong>1 hour</strong>. If you did not request a password reset, you can safely ignore this email — your password will not change.'
     );
     $mailer = new SenTriMailer();
-    return $mailer->send($toEmail, $toName, $subject, $html);
+    return $mailer->send($toEmail, $toName, 'Reset your SenTri password', $html);
 }
 
 /**

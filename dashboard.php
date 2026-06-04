@@ -1,6 +1,9 @@
 <?php
 session_start();
 if (!isset($_SESSION['user_id'])) { header("Location: login.php"); exit; }
+require_once __DIR__ . '/config/auth.php';
+$_role = $_SESSION['role'] ?? 'community';
+if (!in_array($_role, ['community','user'], true)) { redirect_to_portal(); }
 require __DIR__ . '/config/db.php';
 
 $user_id    = (int)$_SESSION['user_id'];
@@ -49,7 +52,7 @@ $section   = isset($_GET['section']) ? $_GET['section'] : 'feed';
 <style>
 /* ─── LIGHT MODE VARIABLES ─── */
 :root{
-  --blue:#1c57b2;--blue-dark:#0e3d8c;--blue-light:#3a8dff;
+  --blue:#0a3d62;--blue-dark:#062444;--blue-light:#1a5276;--gold:#f39c12;
   --red:#e53e3e;--green:#38a169;--orange:#dd6b20;
   --text:#1a1a2e;--muted:#666;
   --bg:#f0f2f7;--card:#fff;--card-border:#eee;
@@ -155,7 +158,7 @@ body.dark .toast-body{color:var(--muted);}
 body{background:var(--bg);display:flex;min-height:100vh;color:var(--text);overflow-x:hidden;transition:background 0.3s,color 0.3s;}
 
 /* ─── SIDEBAR ─── */
-.sidebar{width:var(--sidebar-w);background:linear-gradient(180deg,#1c57b2 0%,#0e3d8c 60%,#091d5c 100%);color:#fff;display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;transition:transform 0.3s cubic-bezier(0.4,0,0.2,1);box-shadow:4px 0 20px rgba(0,0,0,0.2);}
+.sidebar{width:var(--sidebar-w);background:linear-gradient(180deg,#062444 0%,#0a3d62 55%,#0e4d80 100%);color:#fff;display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;transition:transform 0.3s cubic-bezier(0.4,0,0.2,1);box-shadow:4px 0 20px rgba(0,0,0,0.2);}
 .sidebar.closed{transform:translateX(calc(-1*var(--sidebar-w)));}
 .sidebar-header{padding:20px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.1);}
 .brand-logo{display:flex;align-items:center;gap:10px;}
@@ -513,8 +516,8 @@ body.dark .detail-map-btn{background:#1f3a5f;color:var(--blue-light);border-colo
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-header">
     <div class="brand-logo">
-      <div class="brand-icon-s"><i class="fas fa-shield-halved"></i></div>
-      <span class="brand-name-s">SenTri</span>
+      <div class="brand-icon-s" style="background:rgba(243,156,18,0.2);border-color:rgba(243,156,18,0.4);"><i class="fas fa-shield-halved" style="color:#f39c12;"></i></div>
+      <div><div class="brand-name-s">SenTri</div><div style="font-size:0.6rem;color:rgba(255,255,255,0.5);letter-spacing:1px;text-transform:uppercase;">Community Portal</div></div>
     </div>
     <button class="toggle-btn" onclick="closeSidebar()"><i class="fas fa-xmark"></i></button>
   </div>
