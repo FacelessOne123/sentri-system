@@ -476,6 +476,82 @@ switch ($action) {
         echo json_encode(['status'=>'success','logs'=>$logs]);
         break;
 
+
+    case 'escalate_report':
+        // Barangay can escalate a report to LGU (sets escalated_to_lgu flag and logs it)
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status'=>'error','message'=>'POST required.']); exit; }
+        if (!in_array($role, ['barangay','lgu','admin'], true)) { echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit; }
+        $report_id = (int)($_POST['report_id'] ?? 0);
+        if (!$report_id) { echo json_encode(['status'=>'error','message'=>'Invalid report ID.']); exit; }
+        // Ensure escalated_to_lgu column exists
+        $db_esc = $conn->query("SELECT DATABASE()")->fetch_row()[0];
+        $esc_cols = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_esc' AND TABLE_NAME='reports'");
+        $ec_list = [];
+        while($ec_r = $esc_cols->fetch_row()) $ec_list[] = $ec_r[0];
+        if (!in_array('escalated_to_lgu', $ec_list)) {
+            $conn->query("ALTER TABLE reports ADD COLUMN escalated_to_lgu TINYINT(1) NOT NULL DEFAULT 0 AFTER resolved_at");
+        }
+        $upd_esc = $conn->prepare("UPDATE reports SET escalated_to_lgu=1 WHERE id=? AND is_archived=0");
+        $upd_esc->bind_param("i", $report_id);
+        $upd_esc->execute();
+        if ($upd_esc->affected_rows > 0 || $upd_esc->affected_rows === 0) {
+            // Log to audit
+            $r_info = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
+            $esc_title = $conn->real_escape_string($r_info['title'] ?? 'Unknown');
+            $esc_by    = (int)$_SESSION['user_id'];
+            $esc_name  = $conn->real_escape_string(($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? ''));
+            $conn->query("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES ($report_id,'$esc_title','escalated_to_lgu',$esc_by,'$esc_name')");
+            echo json_encode(['status'=>'success','message'=>'Report escalated to LGU.']);
+        } else {
+            echo json_encode(['status'=>'error','message'=>'Report not found.']);
+        }
+        $upd_esc->close();
+        break;
+
+    case 'lgu_dispatch':
+        // LGU can directly assign a report to a specific responder
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status'=>'error','message'=>'POST required.']); exit; }
+        if (!in_array($role, ['lgu','admin'], true)) { echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit; }
+        $report_id    = (int)($_POST['report_id']    ?? 0);
+        $responder_id = (int)($_POST['responder_id'] ?? 0);
+        if (!$report_id || !$responder_id) { echo json_encode(['status'=>'error','message'=>'Invalid IDs.']); exit; }
+        // Verify responder is approved
+        $chk_resp = $conn->prepare("SELECT id FROM users WHERE id=? AND role='first_responder' AND is_approved=1 LIMIT 1");
+        $chk_resp->bind_param("i", $responder_id); $chk_resp->execute(); $chk_resp->store_result();
+        if ($chk_resp->num_rows === 0) { echo json_encode(['status'=>'error','message'=>'Responder not found or not approved.']); exit; }
+        $chk_resp->close();
+        $dis = $conn->prepare("UPDATE reports SET assigned_to=? WHERE id=? AND is_archived=0");
+        $dis->bind_param("ii", $responder_id, $report_id);
+        $dis->execute();
+        echo json_encode(['status'=>'success','message'=>'Report dispatched to responder.']);
+        $dis->close();
+        break;
+
+    case 'update_report_status':
+        // LGU/Barangay can change status of any active report
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status'=>'error','message'=>'POST required.']); exit; }
+        if (!in_array($role, ['barangay','lgu','admin'], true)) { echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit; }
+        $report_id  = (int)($_POST['report_id'] ?? 0);
+        $new_status = trim($_POST['status'] ?? '');
+        $allowed_statuses = ['dangerous','caution','safe'];
+        if (!$report_id || !in_array($new_status, $allowed_statuses)) { echo json_encode(['status'=>'error','message'=>'Invalid parameters.']); exit; }
+        $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : '';
+        $s_upd = $conn->prepare("UPDATE reports SET status=? $res_at WHERE id=? AND is_archived=0");
+        $s_upd->bind_param("si", $new_status, $report_id);
+        $s_upd->execute();
+        if ($s_upd->affected_rows >= 0) {
+            $r_info2 = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
+            $s_title = $conn->real_escape_string($r_info2['title'] ?? 'Unknown');
+            $s_by    = (int)$_SESSION['user_id'];
+            $s_name  = $conn->real_escape_string(($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? ''));
+            $conn->query("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES ($report_id,'$s_title','status_changed_to_$new_status',$s_by,'$s_name')");
+            echo json_encode(['status'=>'success','message'=>"Status updated to $new_status."]);
+        } else {
+            echo json_encode(['status'=>'error','message'=>'Report not found.']);
+        }
+        $s_upd->close();
+        break;
+
     default:
         echo json_encode(['status'=>'error','message'=>'Unknown action.']);
 }
