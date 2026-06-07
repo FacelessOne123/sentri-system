@@ -29,7 +29,9 @@ function portal_url($role) {
         case 'lgu':             return '/portal/lgu.php';
         case 'first_responder': return '/portal/responder.php';
         case 'admin':           return '/admin.php';
-        default:                return '/dashboard.php';
+        case 'community':
+        case 'user':            return '/portal/community.php';
+        default:                return '/portal/community.php';
     }
 }
 
