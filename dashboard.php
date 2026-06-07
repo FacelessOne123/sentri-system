@@ -3,6 +3,9 @@ session_start();
 if (!isset($_SESSION['user_id'])) { header("Location: login.php"); exit; }
 require_once __DIR__ . '/config/auth.php';
 $_role = $_SESSION['role'] ?? 'community';
+// Redirect to dedicated community portal
+header('Location: /portal/community.php'); exit;
+
 if (!in_array($_role, ['community','user'], true)) { redirect_to_portal(); }
 require __DIR__ . '/config/db.php';
 
