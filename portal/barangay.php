@@ -43,7 +43,12 @@ $reports = $contacts = $residents = [];
 
 if (in_array($view, ['overview','reports'])) {
     $limit = ($view === 'overview') ? 20 : 100;
-    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
+    // Ensure escalated_to_lgu column exists (added in a later migration)
+    $db_b = $conn->query("SELECT DATABASE()")->fetch_row()[0];
+    $bc = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_b' AND TABLE_NAME='reports' AND COLUMN_NAME='escalated_to_lgu'");
+    $has_esc_col = ($bc && $bc->num_rows > 0);
+    $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
+    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
     $s->execute(); $res=$s->get_result();
     while($row=$res->fetch_assoc()) $reports[]=$row;
     $s->close();
@@ -180,8 +185,21 @@ tr:hover td{background:#fafafa;}
 /* ACTION BTNS */
 .btn-icon{width:30px;height:30px;border:none;border-radius:7px;cursor:pointer;font-size:0.8rem;display:inline-flex;align-items:center;justify-content:center;transition:all 0.15s;}
 .btn-view{background:#eff6ff;color:#2563eb;} .btn-view:hover{background:#dbeafe;}
-.btn-escalate{background:#fffbeb;color:#d97706;} .btn-escalate:hover{background:#fde68a;}
-.btn-resolve{background:#f0fdf4;color:#16a34a;} .btn-resolve:hover{background:#dcfce7;}
+/* TOAST NOTIFICATIONS */
+.toast-container{position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:10px;pointer-events:none;}
+.toast{display:flex;align-items:center;gap:10px;padding:13px 18px;border-radius:12px;font-size:0.84rem;font-weight:600;box-shadow:0 8px 30px rgba(0,0,0,0.18);pointer-events:all;animation:toastIn 0.3s cubic-bezier(0.34,1.56,0.64,1);min-width:260px;max-width:360px;}
+.toast-success{background:#166534;color:#fff;}
+.toast-error{background:#991b1b;color:#fff;}
+.toast-info{background:#1e40af;color:#fff;}
+.toast i{font-size:1rem;flex-shrink:0;}
+@keyframes toastIn{from{opacity:0;transform:translateY(16px) scale(0.96);}to{opacity:1;transform:translateY(0) scale(1);}}
+/* ACTION BUTTON STATES */
+.btn-action:disabled{opacity:0.65;cursor:not-allowed;}
+.btn-action.btn-done{background:#6b7280 !important;color:#fff !important;cursor:default;}
+/* TABLE QUICK-ACTION BUTTONS */
+.btn-icon.btn-escalate{background:#fff7ed;color:#c2410c;} .btn-icon.btn-escalate:hover{background:#ffedd5;}
+.btn-icon.btn-resolve{background:#f0fdf4;color:#16a34a;} .btn-icon.btn-resolve:hover{background:#dcfce7;}
+.btn-icon:disabled{opacity:0.5;cursor:not-allowed;}
 /* CONTACTS */
 .contact-row{display:flex;align-items:flex-start;gap:14px;padding:14px 18px;border-bottom:1px solid #f3f4f6;}
 .contact-row:last-child{border-bottom:none;}
@@ -260,6 +278,9 @@ tr:hover td{background:#fafafa;}
 <body>
 <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
 
+<!-- TOAST CONTAINER -->
+<div class="toast-container" id="toastContainer"></div>
+
 <!-- REPORT DETAIL MODAL -->
 <div class="modal-bg" id="reportModal">
   <div class="modal">
@@ -268,15 +289,8 @@ tr:hover td{background:#fafafa;}
       <button class="modal-close" onclick="closeModal()"><i class="fas fa-xmark"></i></button>
     </div>
     <div class="modal-body" id="modalBody"></div>
-    <div class="modal-actions">
-      <button class="btn-action btn-resolve-full" id="modalResolveBtn"><i class="fas fa-circle-check"></i> Mark Resolved</button>
-      <button class="btn-action btn-escalate-full" id="modalEscalateBtn"><i class="fas fa-arrow-up-from-bracket"></i> Escalate to LGU</button>
-      <select id="modalStatusSelect" style="padding:8px 12px;border-radius:9px;border:1.5px solid var(--border);font-size:0.82rem;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer;background:#fff;" onchange="changeStatus(this.value)">
-        <option value="">— Change Status —</option>
-        <option value="dangerous">⛔ Mark Dangerous</option>
-        <option value="caution">⚠️ Mark Caution</option>
-        <option value="safe">✅ Mark Safe</option>
-      </select>
+    <div class="modal-actions" id="modalActions">
+      <!-- populated dynamically by openModal() based on report state -->
     </div>
   </div>
 </div>
@@ -510,99 +524,314 @@ tr:hover td{background:#fafafa;}
 </div>
 
 <script>
-async function changeStatus(newStatus){
-  if(!newStatus || !currentReportId) return;
-  if(!confirm('Change report status to ' + newStatus + '?')) { document.getElementById('modalStatusSelect').value=''; return; }
-  try {
-    var fd=new FormData(); fd.append('action','update_report_status');
-    fd.append('report_id',currentReportId); fd.append('status',newStatus);
-    var res=await fetch('../api/reports.php',{method:'POST',body:fd});
-    var data=await res.json();
-    if(data.status==='success'){ closeModal(); location.reload(); }
-    else { alert(data.message||'Error.'); document.getElementById('modalStatusSelect').value=''; }
-  } catch(e) { document.getElementById('modalStatusSelect').value=''; }
+// ── Toast notification system ─────────────────────────────────────────────
+function showToast(message, type) {
+  type = type || 'success';
+  var icons = { success: 'fa-circle-check', error: 'fa-circle-xmark', info: 'fa-circle-info' };
+  var tc = document.getElementById('toastContainer');
+  var t = document.createElement('div');
+  t.className = 'toast toast-' + type;
+  t.innerHTML = '<i class="fas ' + (icons[type]||'fa-circle-info') + '"></i><span>' + message + '</span>';
+  tc.appendChild(t);
+  setTimeout(function() {
+    t.style.animation = 'none'; t.style.opacity = '0'; t.style.transform = 'translateY(8px) scale(0.96)';
+    t.style.transition = 'all 0.25s ease';
+    setTimeout(function(){ if(t.parentNode) tc.removeChild(t); }, 280);
+  }, 3200);
 }
 
-function openSidebar(){document.getElementById('sidebar').classList.add('open');document.getElementById('overlay').classList.add('show');document.body.style.overflow='hidden';}
-function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show');document.body.style.overflow='';}
-function closeModal(){document.getElementById('reportModal').classList.remove('show');}
+// ── Modal state ───────────────────────────────────────────────────────────
+var currentReportId     = null;
+var currentReportStatus = null;
+var currentEscalated    = false;
 
-function quickResolve(id,btn){
-  if(!confirm('Mark this report as resolved?'))return;
-  btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i>';
-  var fd=new FormData(); fd.append('action','resolve_report'); fd.append('report_id',id);
-  fetch('../api/reports.php',{method:'POST',body:fd})
-    .then(function(r){return r.json();})
-    .then(function(data){if(data.status==='success')location.reload();else{alert(data.message);btn.disabled=false;btn.innerHTML='<i class="fas fa-check"></i>';}})
-    .catch(function(){btn.disabled=false;btn.innerHTML='<i class="fas fa-check"></i>';});
-}
-var currentReportId = null;
-function viewReport(id,title,category,status,barangay,reporter,date,desc){
-  currentReportId=id;
-  document.getElementById('modalTitle').textContent=title;
-  document.getElementById('modalBody').innerHTML=
-    '<div class="detail-row"><div class="detail-lbl">Status</div><div class="detail-val"><span class="pill pill-'+status+'">'+status.charAt(0).toUpperCase()+status.slice(1)+'</span></div></div>'+
+function viewReport(id, title, category, status, barangay, reporter, date, desc, escalated) {
+  currentReportId     = id;
+  currentReportStatus = status;
+  currentEscalated    = !!escalated;
+  document.getElementById('modalTitle').textContent = title;
+
+  // Status colour
+  var statusColors = { dangerous: ['#fef2f2','#991b1b'], caution: ['#fffbeb','#92400e'], safe: ['#f0fdf4','#166534'] };
+  var sc = statusColors[status] || ['#f3f4f6','#374151'];
+  var isResolved = (status === 'safe');
+
+  document.getElementById('modalBody').innerHTML =
+    '<div class="detail-row"><div class="detail-lbl">Status</div><div class="detail-val"><span class="pill pill-'+status+'">' + status.charAt(0).toUpperCase()+status.slice(1) + '</span>' +
+    (escalated ? ' &nbsp;<span style="display:inline-flex;align-items:center;gap:4px;font-size:0.72rem;font-weight:700;color:#92400e;background:#fef3c7;padding:2px 8px;border-radius:6px;border:1px solid #fde68a;"><i class="fas fa-arrow-up-from-bracket"></i> Escalated to LGU</span>' : '') +
+    '</div></div>' +
     '<div class="detail-row"><div class="detail-lbl">Category</div><div class="detail-val">'+category.charAt(0).toUpperCase()+category.slice(1)+'</div></div>'+
     '<div class="detail-row"><div class="detail-lbl">Location</div><div class="detail-val">'+barangay+'</div></div>'+
     '<div class="detail-row"><div class="detail-lbl">Reported By</div><div class="detail-val">'+reporter+'</div></div>'+
     '<div class="detail-row"><div class="detail-lbl">Date</div><div class="detail-val">'+date+'</div></div>'+
     (desc?'<div class="detail-row"><div class="detail-lbl">Description</div><div class="detail-val" style="line-height:1.6;">'+desc+'</div></div>':'');
+
+  // Build action buttons based on current state
+  var actions = document.getElementById('modalActions');
+  actions.innerHTML = '';
+
+  if (!isResolved) {
+    // Resolve button
+    var resolveBtn = document.createElement('button');
+    resolveBtn.className = 'btn-action btn-resolve-full';
+    resolveBtn.id = 'modalResolveBtn';
+    resolveBtn.innerHTML = '<i class="fas fa-circle-check"></i> Mark Resolved';
+    resolveBtn.onclick = function() { doResolve(resolveBtn); };
+    actions.appendChild(resolveBtn);
+
+    // Escalate button — show greyed "Already Escalated" if already escalated
+    var escBtn = document.createElement('button');
+    if (escalated) {
+      escBtn.className = 'btn-action btn-done';
+      escBtn.disabled = true;
+      escBtn.innerHTML = '<i class="fas fa-check"></i> Already Escalated';
+    } else {
+      escBtn.className = 'btn-action btn-escalate-full';
+      escBtn.id = 'modalEscalateBtn';
+      escBtn.innerHTML = '<i class="fas fa-arrow-up-from-bracket"></i> Escalate to LGU';
+      escBtn.onclick = function() { doEscalate(escBtn); };
+    }
+    actions.appendChild(escBtn);
+  } else {
+    // Already resolved — show read-only badge
+    var badge = document.createElement('span');
+    badge.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:9px;font-size:0.82rem;font-weight:700;background:#f0fdf4;color:#166534;border:1.5px solid #bbf7d0;';
+    badge.innerHTML = '<i class="fas fa-circle-check"></i> This report is resolved';
+    actions.appendChild(badge);
+  }
+
+  // Status changer (always shown for non-resolved reports)
+  if (!isResolved) {
+    var sel = document.createElement('select');
+    sel.id = 'modalStatusSelect';
+    sel.style.cssText = 'padding:8px 12px;border-radius:9px;border:1.5px solid var(--border);font-size:0.82rem;font-weight:600;font-family:\'Inter\',sans-serif;cursor:pointer;background:#fff;';
+    sel.innerHTML = '<option value="">— Change Status —</option><option value="dangerous">⛔ Mark Dangerous</option><option value="caution">⚠️ Mark Caution</option><option value="safe">✅ Mark Safe</option>';
+    sel.onchange = function() { changeStatus(this.value); };
+    actions.appendChild(sel);
+  }
+
   document.getElementById('reportModal').classList.add('show');
 }
-document.getElementById('modalResolveBtn').onclick=async function(){
-  if(!currentReportId)return;
-  const fd=new FormData(); fd.append('action','resolve_report'); fd.append('report_id',currentReportId);
-  const res=await fetch('../api/reports.php',{method:'POST',body:fd});
-  const data=await res.json();
-  if(data.status==='success'){closeModal();location.reload();}else alert(data.message);
-};
-document.getElementById('reportModal').addEventListener('click',function(e){if(e.target===this)closeModal();});
 
-// Escalate to LGU
-document.getElementById('modalEscalateBtn').onclick = async function(){
-  if(!currentReportId) return;
-  if(!confirm('Escalate this report to LGU for urgent attention?')) return;
-  var btn = this; btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Escalating…';
+document.getElementById('reportModal').addEventListener('click', function(e) { if(e.target===this) closeModal(); });
+
+function closeModal() { document.getElementById('reportModal').classList.remove('show'); }
+
+// ── Resolve ───────────────────────────────────────────────────────────────
+async function doResolve(btn) {
+  if (!currentReportId) return;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Resolving…';
   try {
-    var fd=new FormData(); fd.append('action','escalate_report'); fd.append('report_id',currentReportId);
-    var res=await fetch('../api/reports.php',{method:'POST',body:fd});
-    var data=await res.json();
-    if(data.status==='success'){
-      btn.innerHTML='<i class="fas fa-check"></i> Escalated to LGU';
-      btn.style.background='#d97706';
-      setTimeout(function(){ closeModal(); location.reload(); }, 1000);
+    var fd = new FormData();
+    fd.append('action', 'resolve_report');
+    fd.append('report_id', currentReportId);
+    var res = await fetch('../api/reports.php', { method: 'POST', body: fd });
+    var data = await res.json();
+    if (data.status === 'success') {
+      showToast('Report marked as resolved.', 'success');
+      closeModal();
+      refreshReportRow(currentReportId, 'safe', currentEscalated);
     } else {
-      alert(data.message||'Escalation failed.'); btn.disabled=false;
-      btn.innerHTML='<i class="fas fa-arrow-up-from-bracket"></i> Escalate to LGU';
+      showToast(data.message || 'Could not resolve report.', 'error');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-circle-check"></i> Mark Resolved';
     }
   } catch(e) {
-    btn.disabled=false; btn.innerHTML='<i class="fas fa-arrow-up-from-bracket"></i> Escalate to LGU';
+    showToast('Network error — please try again.', 'error');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-circle-check"></i> Mark Resolved';
   }
-};
+}
 
-// Client-side filter for reports table
+// ── Escalate ──────────────────────────────────────────────────────────────
+async function doEscalate(btn) {
+  if (!currentReportId) return;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Escalating…';
+  try {
+    var fd = new FormData();
+    fd.append('action', 'escalate_report');
+    fd.append('report_id', currentReportId);
+    var res = await fetch('../api/reports.php', { method: 'POST', body: fd });
+    var data = await res.json();
+    if (data.status === 'success') {
+      btn.className = 'btn-action btn-done';
+      btn.innerHTML = '<i class="fas fa-check"></i> Escalated to LGU';
+      showToast('Report escalated to LGU.', 'info');
+      currentEscalated = true;
+      // Update escalated badge in body
+      var statusVal = document.querySelector('#modalBody .detail-val');
+      if (statusVal && !statusVal.querySelector('.esc-tag')) {
+        var tag = document.createElement('span');
+        tag.className = 'esc-tag';
+        tag.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:0.72rem;font-weight:700;color:#92400e;background:#fef3c7;padding:2px 8px;border-radius:6px;border:1px solid #fde68a;margin-left:6px;';
+        tag.innerHTML = '<i class="fas fa-arrow-up-from-bracket"></i> Escalated to LGU';
+        statusVal.appendChild(tag);
+      }
+      // Update table row badge
+      updateEscalateBadgeInRow(currentReportId);
+      setTimeout(function() { closeModal(); }, 1200);
+    } else {
+      showToast(data.message || 'Escalation failed.', 'error');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-arrow-up-from-bracket"></i> Escalate to LGU';
+    }
+  } catch(e) {
+    showToast('Network error — please try again.', 'error');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-arrow-up-from-bracket"></i> Escalate to LGU';
+  }
+}
+
+// ── Change Status (dropdown) ───────────────────────────────────────────────
+async function changeStatus(newStatus) {
+  if (!newStatus || !currentReportId) return;
+  var sel = document.getElementById('modalStatusSelect');
+  sel.disabled = true;
+  try {
+    var fd = new FormData();
+    fd.append('action', 'update_report_status');
+    fd.append('report_id', currentReportId);
+    fd.append('status', newStatus);
+    var res = await fetch('../api/reports.php', { method: 'POST', body: fd });
+    var data = await res.json();
+    if (data.status === 'success') {
+      showToast('Status updated to ' + newStatus + '.', 'success');
+      closeModal();
+      refreshReportRow(currentReportId, newStatus, currentEscalated);
+    } else {
+      showToast(data.message || 'Status change failed.', 'error');
+      if(sel) { sel.disabled = false; sel.value = ''; }
+    }
+  } catch(e) {
+    showToast('Network error — please try again.', 'error');
+    if(sel) { sel.disabled = false; sel.value = ''; }
+  }
+}
+
+// ── Quick inline actions (table row buttons) ──────────────────────────────
+function quickResolve(id, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+  var fd = new FormData();
+  fd.append('action', 'resolve_report');
+  fd.append('report_id', id);
+  fetch('../api/reports.php', { method: 'POST', body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'success') {
+        showToast('Report marked as resolved.', 'success');
+        refreshReportRow(id, 'safe', false);
+      } else {
+        showToast(data.message || 'Could not resolve.', 'error');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-check"></i>';
+      }
+    })
+    .catch(function() {
+      showToast('Network error — please try again.', 'error');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-check"></i>';
+    });
+}
+
+function quickEscalate(id, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+  var fd = new FormData();
+  fd.append('action', 'escalate_report');
+  fd.append('report_id', id);
+  fetch('../api/reports.php', { method: 'POST', body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'success') {
+        showToast('Report escalated to LGU.', 'info');
+        btn.innerHTML = '<i class="fas fa-check"></i>';
+        btn.title = 'Escalated to LGU';
+        btn.classList.add('btn-done');
+        btn.style.background = '#fef3c7';
+        btn.style.color = '#92400e';
+      } else {
+        showToast(data.message || 'Escalation failed.', 'error');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-arrow-up-from-bracket"></i>';
+      }
+    })
+    .catch(function() {
+      showToast('Network error — please try again.', 'error');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-arrow-up-from-bracket"></i>';
+    });
+}
+
+// ── DOM helpers: update table rows without full reload ────────────────────
+function refreshReportRow(id, newStatus, escalated) {
+  var rows = document.querySelectorAll('tbody tr');
+  rows.forEach(function(row) {
+    var viewBtn = row.querySelector('.btn-view');
+    if (!viewBtn) return;
+    var onclickAttr = viewBtn.getAttribute('onclick') || '';
+    // Check if this row's view button references this report id
+    if (!onclickAttr.match(new RegExp('viewReport\\s*\\(\\s*' + id + '[,\\s]'))) return;
+
+    // Update status pill
+    var pill = row.querySelector('.pill');
+    if (pill) {
+      pill.className = 'pill pill-' + newStatus;
+      pill.textContent = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+    }
+
+    // Remove or update action buttons
+    var actionsCell = row.querySelector('td:last-child div');
+    if (actionsCell) {
+      // Remove old resolve/escalate buttons, leave view button
+      actionsCell.querySelectorAll('.btn-resolve, .btn-escalate').forEach(function(b) { b.remove(); });
+      if (newStatus !== 'safe') {
+        // Re-add resolve button
+        var rb = document.createElement('button');
+        rb.className = 'btn-icon btn-resolve';
+        rb.title = 'Mark Resolved';
+        rb.innerHTML = '<i class="fas fa-check"></i>';
+        rb.onclick = function() { quickResolve(id, rb); };
+        actionsCell.appendChild(rb);
+      }
+    }
+  });
+  // Reapply filter count
+  applyRptFilters();
+}
+
+function updateEscalateBadgeInRow(id) {
+  // No-op — escalation doesn't change the row's status pill, just a note
+}
+
+// ── Sidebar & filter ──────────────────────────────────────────────────────
+function openSidebar(){document.getElementById('sidebar').classList.add('open');document.getElementById('overlay').classList.add('show');document.body.style.overflow='hidden';}
+function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show');document.body.style.overflow='';}
+
 var activeRptStatus = 'all';
-function filterReports(status, btn){
+function filterReports(status, btn) {
   activeRptStatus = status;
-  document.querySelectorAll('.rf-btn').forEach(function(b){ b.classList.remove('rf-active'); });
+  document.querySelectorAll('.rf-btn').forEach(function(b) { b.classList.remove('rf-active'); });
   btn.classList.add('rf-active');
   applyRptFilters();
 }
-function searchReports(q){ applyRptFilters(); }
-function applyRptFilters(){
+function searchReports(q) { applyRptFilters(); }
+function applyRptFilters() {
   var q = (document.getElementById('rptSearch')||{value:''}).value.toLowerCase();
   var rows = document.querySelectorAll('tbody tr');
   var visible = 0;
-  rows.forEach(function(row){
+  rows.forEach(function(row) {
     var statusEl = row.querySelector('.pill');
-    var status = statusEl ? statusEl.className.replace('pill pill-','').trim() : '';
+    var status = statusEl ? statusEl.className.replace(/pill\s*/g,'').replace('pill-','').trim() : '';
     var text = row.textContent.toLowerCase();
-    var show = (activeRptStatus==='all' || status===activeRptStatus) && (!q || text.includes(q));
+    var show = (activeRptStatus === 'all' || status === activeRptStatus) && (!q || text.includes(q));
     row.style.display = show ? '' : 'none';
-    if(show) visible++;
+    if (show) visible++;
   });
   var cnt = document.getElementById('rptCount');
-  if(cnt) cnt.textContent = visible + ' records';
+  if (cnt) cnt.textContent = visible + ' records';
 }
 </script>
 
@@ -665,3 +894,4 @@ document.getElementById('contactModal').addEventListener('click',function(e){if(
 </script>
 </body>
 </html>
+
