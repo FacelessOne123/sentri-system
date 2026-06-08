@@ -1619,27 +1619,48 @@ function renderVulnerabilities() {
     critical: {label:'Critical', cls:'critical'},
   };
 
+  // Safe lookup: falls back to 'warning' if status string is missing/unknown.
+  const safeStatus = (s) => statusMap[s] || statusMap.warning;
+
+  // Keys for detail cards → flat *_status field names for history rows.
   const cardKeyMap = {
-    https: 'vulnCardHttps',
-    session: 'vulnCardSession',
-    password_hash: 'vulnCardPassword',
-    security_headers: 'vulnCardHeaders',
-    upload_restrictions: 'vulnCardUpload',
+    https:               { cardId: 'vulnCardHttps',    statusField: 'https_status' },
+    session:             { cardId: 'vulnCardSession',  statusField: 'session_status' },
+    password_hash:       { cardId: 'vulnCardPassword', statusField: 'password_hash_status' },
+    security_headers:    { cardId: 'vulnCardHeaders',  statusField: 'security_headers_status' },
+    upload_restrictions: { cardId: 'vulnCardUpload',   statusField: 'upload_restrictions_status' },
   };
 
-  Object.entries(cardKeyMap).forEach(([key, cardId]) => {
+  Object.entries(cardKeyMap).forEach(([key, { cardId, statusField }]) => {
     const card = document.getElementById(cardId);
     if (!card) return;
-    let result = { status: 'warning', detail: 'No scan result available.' };
-    if (latest && latest[key]) result = latest[key];
-    const status = statusMap[result.status] || statusMap.warning;
+
+    // Fresh scan: details is a nested object { status, detail }.
+    // History row: details may be a JSON string or absent; fall back to flat *_status field.
+    let statusStr = 'warning';
+    let detail    = 'No scan result available.';
+
+    if (latest) {
+      // details object present (fresh scan or parsed history)
+      const d = latest.details && latest.details[key];
+      if (d && d.status) {
+        statusStr = d.status;
+        detail    = d.detail || detail;
+      } else if (latest[statusField]) {
+        // Flat history row — no rich detail text available
+        statusStr = latest[statusField];
+        detail    = '';
+      }
+    }
+
+    const status = safeStatus(statusStr);
     card.querySelector('.vuln-status').textContent = status.label;
-    card.querySelector('.vuln-status').className = 'vuln-status ' + status.cls;
-    card.querySelector('.vuln-detail').textContent = result.detail || 'No detail available.';
+    card.querySelector('.vuln-status').className   = 'vuln-status ' + status.cls;
+    card.querySelector('.vuln-detail').textContent  = detail;
   });
 
-  const historyBody = document.getElementById('vulnHistoryBody');
-  const historyTable = document.getElementById('vulnHistoryTable');
+  const historyBody    = document.getElementById('vulnHistoryBody');
+  const historyTable   = document.getElementById('vulnHistoryTable');
   const historyLoading = document.getElementById('vulnHistoryLoading');
 
   if (allSecurityScans.length === 0) {
@@ -1650,17 +1671,23 @@ function renderVulnerabilities() {
   }
 
   historyBody.innerHTML = allSecurityScans.map((scan, idx) => {
-    const statusRow = scan;
+    // History rows have flat *_status strings; fresh scans have a details object.
+    // Resolve each status defensively so undefined keys never crash .cls access.
+    const hs = safeStatus(scan.https_status               || (scan.details && scan.details.https               && scan.details.https.status));
+    const ss = safeStatus(scan.session_status             || (scan.details && scan.details.session             && scan.details.session.status));
+    const ps = safeStatus(scan.password_hash_status       || (scan.details && scan.details.password_hash       && scan.details.password_hash.status));
+    const sh = safeStatus(scan.security_headers_status    || (scan.details && scan.details.security_headers    && scan.details.security_headers.status));
+    const us = safeStatus(scan.upload_restrictions_status || (scan.details && scan.details.upload_restrictions && scan.details.upload_restrictions.status));
     return `
       <tr>
         <td>${idx+1}</td>
         <td>${scan.scanned_at}</td>
         <td><strong>${scan.score}/100</strong></td>
-        <td><span class="badge ${statusMap[statusRow.https_status].cls}">${statusMap[statusRow.https_status].label}</span></td>
-        <td><span class="badge ${statusMap[statusRow.session_status].cls}">${statusMap[statusRow.session_status].label}</span></td>
-        <td><span class="badge ${statusMap[statusRow.password_hash_status].cls}">${statusMap[statusRow.password_hash_status].label}</span></td>
-        <td><span class="badge ${statusMap[statusRow.security_headers_status].cls}">${statusMap[statusRow.security_headers_status].label}</span></td>
-        <td><span class="badge ${statusMap[statusRow.upload_restrictions_status].cls}">${statusMap[statusRow.upload_restrictions_status].label}</span></td>
+        <td><span class="badge ${hs.cls}">${hs.label}</span></td>
+        <td><span class="badge ${ss.cls}">${ss.label}</span></td>
+        <td><span class="badge ${ps.cls}">${ps.label}</span></td>
+        <td><span class="badge ${sh.cls}">${sh.label}</span></td>
+        <td><span class="badge ${us.cls}">${us.label}</span></td>
       </tr>`;
   }).join('');
   historyTable.style.display = 'table';
@@ -1676,7 +1703,9 @@ async function loadVulnerabilities() {
     if (data.status === 'success') {
       allSecurityScans = data.history.map(item => ({
         ...item,
-        score: parseInt(item.score, 10),
+        score:   parseInt(item.score, 10),
+        // Parse the stored details JSON string into an object for card rendering
+        details: (() => { try { return typeof item.details === 'string' ? JSON.parse(item.details) : (item.details || null); } catch(e) { return null; } })(),
       }));
       renderVulnerabilities();
       return;
@@ -1704,7 +1733,26 @@ async function runVulnerabilityAssessment() {
     const res = await fetch('api/security.php?action=run_security_scan', { method: 'POST' });
     const data = await res.json();
     if (data.status === 'success' && data.scan) {
-      allSecurityScans.unshift(data.scan);
+      // Normalize the fresh scan into the same flat shape as history rows,
+      // but keep the nested details object so cards can still show rich text.
+      const s = data.scan;
+      const normalized = {
+        scanned_at:               s.scanned_at,
+        score:                    s.score,
+        https_status:             s.https               ? s.https.status               : 'warning',
+        session_status:           s.session             ? s.session.status             : 'warning',
+        password_hash_status:     s.password_hash       ? s.password_hash.status       : 'warning',
+        security_headers_status:  s.security_headers    ? s.security_headers.status    : 'warning',
+        upload_restrictions_status: s.upload_restrictions ? s.upload_restrictions.status : 'warning',
+        details: {
+          https:               s.https,
+          session:             s.session,
+          password_hash:       s.password_hash,
+          security_headers:    s.security_headers,
+          upload_restrictions: s.upload_restrictions,
+        },
+      };
+      allSecurityScans.unshift(normalized);
       renderVulnerabilities();
     } else {
       alert(data.message || 'Assessment failed.');
@@ -1719,4 +1767,5 @@ async function runVulnerabilityAssessment() {
 </script>
 </body>
 </html>
+
 
