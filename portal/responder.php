@@ -41,6 +41,7 @@ $queue = $assigned = $contacts = $resolved = [];
 
 if ($view === 'queue' || $view === 'overview') {
     $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.assigned_to,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.status IN('dangerous','caution') ORDER BY FIELD(r.status,'dangerous','caution'),r.created_at DESC LIMIT 60");
+    if (!$s) { die("DB Error (queue): " . $conn->error); }
     $s->execute(); $res=$s->get_result();
     while($row=$res->fetch_assoc()) $queue[]=$row;
     $s->close();
@@ -48,6 +49,7 @@ if ($view === 'queue' || $view === 'overview') {
 
 if ($view === 'assigned') {
     $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.assigned_to=? AND r.is_archived=0 ORDER BY r.created_at DESC");
+    if (!$s) { die("DB Error (assigned): " . $conn->error); }
     $s->bind_param("i",$uid); $s->execute(); $res=$s->get_result();
     while($row=$res->fetch_assoc()) $assigned[]=$row;
     $s->close();
@@ -55,6 +57,7 @@ if ($view === 'assigned') {
 
 if ($view === 'resolved') {
     $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.resolved_at,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.assigned_to=? AND r.status='safe' ORDER BY r.resolved_at DESC LIMIT 50");
+    if (!$s) { die("DB Error (resolved): " . $conn->error); }
     $s->bind_param("i",$uid); $s->execute(); $res=$s->get_result();
     while($row=$res->fetch_assoc()) $resolved[]=$row;
     $s->close();
@@ -62,6 +65,7 @@ if ($view === 'resolved') {
 
 if ($view === 'contacts') {
     $s = $conn->prepare("SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name");
+    if (!$s) { die("DB Error (contacts): " . $conn->error); }
     $s->execute(); $res=$s->get_result();
     while($r=$res->fetch_assoc()) $contacts[]=$r;
     $s->close();
