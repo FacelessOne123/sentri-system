@@ -63,9 +63,23 @@ if (!function_exists('sentri_ensure_report_dispatch_schema')) {
             }
         }
 
+        if (!sentri_table_has_column($conn, 'reports', 'accepted_at')) {
+            if (!$conn->query("ALTER TABLE `reports`
+                ADD COLUMN `accepted_at` DATETIME DEFAULT NULL AFTER `assigned_to`")) {
+                error_log('SenTri DB migration error (reports.accepted_at): ' . $conn->error);
+            }
+        }
+
+        if (!sentri_table_has_column($conn, 'reports', 'responded_at')) {
+            if (!$conn->query("ALTER TABLE `reports`
+                ADD COLUMN `responded_at` DATETIME DEFAULT NULL AFTER `accepted_at`")) {
+                error_log('SenTri DB migration error (reports.responded_at): ' . $conn->error);
+            }
+        }
+
         if (!sentri_table_has_column($conn, 'reports', 'resolved_at')) {
             if (!$conn->query("ALTER TABLE `reports`
-                ADD COLUMN `resolved_at` TIMESTAMP DEFAULT NULL AFTER `assigned_to`")) {
+                ADD COLUMN `resolved_at` DATETIME DEFAULT NULL AFTER `responded_at`")) {
                 error_log('SenTri DB migration error (reports.resolved_at): ' . $conn->error);
             }
         }
@@ -84,5 +98,41 @@ if (!function_exists('sentri_ensure_report_dispatch_schema')) {
     }
 }
 
+if (!function_exists('sentri_ensure_audit_log_schema')) {
+    function sentri_ensure_audit_log_schema(mysqli $conn): void {
+        if (sentri_table_has_column($conn, 'report_audit_logs', 'action')) {
+            $schema = null;
+            if ($dbRes = $conn->query("SELECT DATABASE()")) {
+                $dbRow = $dbRes->fetch_row();
+                $schema = $dbRow[0] ?? null;
+                $dbRes->free();
+            }
+            if ($schema) {
+                $stmt = $conn->prepare(
+                    "SELECT DATA_TYPE
+                     FROM INFORMATION_SCHEMA.COLUMNS
+                     WHERE TABLE_SCHEMA = ?
+                       AND TABLE_NAME = 'report_audit_logs'
+                       AND COLUMN_NAME = 'action'
+                     LIMIT 1"
+                );
+                if ($stmt) {
+                    $stmt->bind_param('s', $schema);
+                    $stmt->execute();
+                    $stmt->bind_result($dataType);
+                    $stmt->fetch();
+                    $stmt->close();
+                    if (strtolower((string)$dataType) !== 'varchar') {
+                        if (!$conn->query("ALTER TABLE `report_audit_logs` MODIFY `action` VARCHAR(40) NOT NULL")) {
+                            error_log('SenTri DB migration error (report_audit_logs.action): ' . $conn->error);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 sentri_ensure_report_dispatch_schema($conn);
+sentri_ensure_audit_log_schema($conn);
 ?>

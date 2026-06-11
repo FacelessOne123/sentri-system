@@ -8,6 +8,19 @@ $uid   = (int)$_SESSION['user_id'];
 $fname = $_SESSION['first_name'];
 $view  = $_GET['view'] ?? 'queue';
 $has_assigned_to = sentri_table_has_column($conn, 'reports', 'assigned_to');
+$has_accepted_at = sentri_table_has_column($conn, 'reports', 'accepted_at');
+$has_responded_at = sentri_table_has_column($conn, 'reports', 'responded_at');
+$saved_gps_lat = $saved_gps_lng = null;
+if (sentri_table_has_column($conn, 'users', 'gps_lat') && sentri_table_has_column($conn, 'users', 'gps_lng')) {
+    $gpsRes = $conn->prepare("SELECT gps_lat,gps_lng FROM users WHERE id=? LIMIT 1");
+    if ($gpsRes) {
+        $gpsRes->bind_param("i", $uid);
+        $gpsRes->execute();
+        $gpsRes->bind_result($saved_gps_lat, $saved_gps_lng);
+        $gpsRes->fetch();
+        $gpsRes->close();
+    }
+}
 
 $stmt = $conn->prepare("SELECT org_name,`position`,responder_type,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
 $stmt->bind_param("i",$uid); $stmt->execute();
@@ -22,6 +35,10 @@ $unit_color  = $type_colors[strtolower($prof['responder_type']??'')] ?? '#dc2626
 
 $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'fa-water','fire'=>'fa-fire','health'=>'fa-heart-pulse','infrastructure'=>'fa-road-barrier','other'=>'fa-circle-exclamation'];
 $type_icons = ['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
+
+$assigned_col = $has_assigned_to ? "r.assigned_to," : "NULL AS assigned_to,";
+$accepted_col = $has_accepted_at ? "r.accepted_at," : "NULL AS accepted_at,";
+$responded_col = $has_responded_at ? "r.responded_at," : "NULL AS responded_at,";
 
 function cq($conn,$sql,$t='',$p=[]){
     $s=$conn->prepare($sql);
@@ -41,8 +58,7 @@ $caution_count = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='caution' A
 $queue = $assigned = $contacts = $resolved = $community_reports = [];
 
 if ($view === 'queue' || $view === 'overview') {
-    $assigned_col = $has_assigned_to ? "r.assigned_to," : "NULL AS assigned_to,";
-    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,{$assigned_col}u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.status IN('dangerous','caution') ORDER BY FIELD(r.status,'dangerous','caution'),r.created_at DESC LIMIT 60");
+    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,{$assigned_col}{$accepted_col}{$responded_col}u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.status IN('dangerous','caution') ORDER BY FIELD(r.status,'dangerous','caution'),r.created_at DESC LIMIT 60");
     if (!$s) { die("DB Error (queue): " . $conn->error); }
     $s->execute(); $res=$s->get_result();
     while($row=$res->fetch_assoc()) $queue[]=$row;
@@ -51,7 +67,7 @@ if ($view === 'queue' || $view === 'overview') {
 
 if ($view === 'assigned') {
     if ($has_assigned_to) {
-        $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.assigned_to=? AND r.is_archived=0 ORDER BY r.created_at DESC");
+        $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,{$accepted_col}{$responded_col}u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.assigned_to=? AND r.is_archived=0 ORDER BY r.created_at DESC");
         if (!$s) { die("DB Error (assigned): " . $conn->error); }
         $s->bind_param("i",$uid); $s->execute(); $res=$s->get_result();
         while($row=$res->fetch_assoc()) $assigned[]=$row;
@@ -61,7 +77,7 @@ if ($view === 'assigned') {
 
 if ($view === 'resolved') {
     if ($has_assigned_to) {
-        $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.resolved_at,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.assigned_to=? AND r.status='safe' ORDER BY r.resolved_at DESC LIMIT 50");
+        $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.resolved_at,{$responded_col}u.first_name,u.last_name FROM reports r JOIN users u ON r.user_id=u.id WHERE r.assigned_to=? AND r.status='safe' ORDER BY r.resolved_at DESC LIMIT 50");
         if (!$s) { die("DB Error (resolved): " . $conn->error); }
         $s->bind_param("i",$uid); $s->execute(); $res=$s->get_result();
         while($row=$res->fetch_assoc()) $resolved[]=$row;
@@ -274,7 +290,8 @@ tr:hover td{background:#fafafa;}
 .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:1100;}
 .overlay.show{display:block;}
 /* RESPONSIVE */
-@media(max-width:860px){.sidebar{width:100vw;max-width:100vw;transform:translateX(-100%);z-index:1200;}.sidebar.open{transform:translateX(0);}.sb-close{display:flex;}.main{margin-left:0;}.ham-btn{display:flex;}.stat-row{grid-template-columns:1fr 1fr;}.content{padding:16px;}.topbar{padding:0 16px;}}
+@media(max-width:860px){.sidebar{width:100dvw;max-width:100dvw;transform:translate3d(-100%,0,0);z-index:1200;left:0;right:0;}.sidebar.open{transform:translate3d(0,0,0);}.sb-close{display:flex;}.main{margin-left:0;}.ham-btn{display:flex;}.stat-row{grid-template-columns:1fr 1fr;}.content{padding:16px;}.topbar{padding:0 16px;}}
+@media(max-width:860px){body.sidebar-open .main{display:none;}body.sidebar-open .overlay{z-index:1190;}}
 @media(max-width:480px){.stat-row{grid-template-columns:1fr;}.badge-resp,.page-sub{display:none;}}
 </style>
 </head>
@@ -338,6 +355,23 @@ tr:hover td{background:#fafafa;}
   <div class="content">
 
   <?php if($view === 'queue'): ?>
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-header">
+        <h3><i class="fas fa-location-crosshairs" style="color:var(--red-light);margin-right:6px;"></i>My GPS Location</h3>
+        <span class="card-meta" id="gpsStatus"><?= $saved_gps_lat !== null && $saved_gps_lng !== null ? 'Saved on profile' : 'Not saved yet' ?></span>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+        <div style="min-width:0;">
+          <div id="gpsCoords" style="font-size:0.85rem;font-weight:700;color:var(--text);">
+            <?= $saved_gps_lat !== null && $saved_gps_lng !== null ? htmlspecialchars(number_format((float)$saved_gps_lat, 6).', '.number_format((float)$saved_gps_lng, 6)) : 'Tap the button to get and save your current location.' ?>
+          </div>
+          <div style="font-size:0.76rem;color:var(--muted);margin-top:4px;">Used for navigation to assigned dangerous reports.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" class="btn-dispatch" onclick="captureMyGps(this)"><i class="fas fa-crosshairs"></i> Get My GPS</button>
+        </div>
+      </div>
+    </div>
     <div class="stat-row">
       <div class="stat-card"><div class="stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="stat-num"><?= $danger_count ?></div><div class="stat-lbl">Dangerous</div></div></div>
       <div class="stat-card"><div class="stat-icon" style="background:#fffbeb;color:#d97706;"><i class="fas fa-circle-exclamation"></i></div><div><div class="stat-num"><?= $caution_count ?></div><div class="stat-lbl">Caution</div></div></div>
@@ -372,12 +406,21 @@ tr:hover td{background:#fafafa;}
           </div>
           <div class="inc-actions">
             <?php if($is_mine): ?>
-              <span class="btn-assigned"><i class="fas fa-check"></i> Assigned to Me</span>
+              <span class="btn-assigned"><i class="fas fa-check"></i> LGU Assigned</span>
+              <?php if(empty($r['accepted_at'])): ?>
+                <button class="btn-dispatch" onclick="acceptAssignment(<?= $r['id'] ?>,this)"><i class="fas fa-hand-pointer"></i> Accept Assignment</button>
+              <?php endif; ?>
+              <?php if(!empty($r['latitude']) && !empty($r['longitude'])): ?>
+                <button class="btn-dispatch" onclick="openNavigation(<?= (float)$r['latitude'] ?>, <?= (float)$r['longitude'] ?>)"><i class="fas fa-route"></i> Navigate</button>
+              <?php endif; ?>
+              <?php if(empty($r['responded_at'])): ?>
+                <button class="btn-resolve-sm" onclick="markResponded(<?= $r['id'] ?>,this)"><i class="fas fa-bell"></i> Responded to LGU</button>
+              <?php endif; ?>
               <button class="btn-resolve-sm" onclick="resolve(<?= $r['id'] ?>,this)"><i class="fas fa-circle-check"></i> Resolve</button>
             <?php elseif($is_assigned): ?>
-              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">Assigned</span>
+              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">Assigned by LGU</span>
             <?php else: ?>
-              <button class="btn-dispatch" onclick="assign(<?= $r['id'] ?>,this)"><i class="fas fa-hand-pointer"></i> Assign to Me</button>
+              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">Awaiting LGU dispatch</span>
             <?php endif; ?>
           </div>
         </div>
@@ -421,13 +464,11 @@ tr:hover td{background:#fafafa;}
           </div>
           <div class="inc-actions">
             <?php if($is_mine): ?>
-              <span class="btn-assigned"><i class="fas fa-check"></i> Assigned to Me</span>
+              <span class="btn-assigned"><i class="fas fa-check"></i> LGU Assigned</span>
             <?php elseif($is_assigned): ?>
-              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">Assigned</span>
-            <?php elseif($has_assigned_to && in_array($r['status'], ['dangerous','caution'], true)): ?>
-              <button class="btn-dispatch" onclick="assign(<?= $r['id'] ?>,this)"><i class="fas fa-hand-pointer"></i> Assign to Me</button>
+              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">Assigned by LGU</span>
             <?php else: ?>
-              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">Open</span>
+              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">LGU dispatch only</span>
             <?php endif; ?>
           </div>
         </div>
@@ -457,6 +498,15 @@ tr:hover td{background:#fafafa;}
             </div>
           </div>
           <div class="inc-actions">
+            <?php if(empty($r['accepted_at'])): ?>
+              <button class="btn-dispatch" onclick="acceptAssignment(<?= $r['id'] ?>,this)"><i class="fas fa-hand-pointer"></i> Accept Assignment</button>
+            <?php endif; ?>
+            <?php if(!empty($r['latitude']) && !empty($r['longitude'])): ?>
+              <button class="btn-dispatch" onclick="openNavigation(<?= (float)$r['latitude'] ?>, <?= (float)$r['longitude'] ?>)"><i class="fas fa-route"></i> Navigate</button>
+            <?php endif; ?>
+            <?php if(empty($r['responded_at'])): ?>
+              <button class="btn-resolve-sm" onclick="markResponded(<?= $r['id'] ?>,this)"><i class="fas fa-bell"></i> Responded to LGU</button>
+            <?php endif; ?>
             <button class="btn-resolve-sm" onclick="resolve(<?= $r['id'] ?>,this)"><i class="fas fa-circle-check"></i> Resolve</button>
           </div>
         </div>
@@ -673,15 +723,76 @@ tr:hover td{background:#fafafa;}
 function openSidebar(){document.getElementById('sidebar').classList.add('open');document.getElementById('overlay').classList.add('show');document.body.classList.add('sidebar-open');document.body.style.overflow='hidden';}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show');document.body.classList.remove('sidebar-open');document.body.style.overflow='';}
 
-async function assign(id,btn){
+var responderGps = { lat: <?= $saved_gps_lat !== null ? json_encode((float)$saved_gps_lat) : 'null' ?>, lng: <?= $saved_gps_lng !== null ? json_encode((float)$saved_gps_lng) : 'null' ?> };
+
+function setGpsText(lat, lng, saved){
+  var coords = document.getElementById('gpsCoords');
+  var status = document.getElementById('gpsStatus');
+  if(coords){ coords.textContent = Number(lat).toFixed(6) + ', ' + Number(lng).toFixed(6); }
+  if(status){ status.textContent = saved ? 'Saved on profile' : 'Current location'; }
+}
+
+async function captureMyGps(btn){
+  if(!navigator.geolocation){ alert('Geolocation is not supported on this device.'); return; }
+  var prev = btn.innerHTML; btn.disabled = true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Locating';
+  navigator.geolocation.getCurrentPosition(async function(pos){
+    var lat = pos.coords.latitude;
+    var lng = pos.coords.longitude;
+    responderGps.lat = lat; responderGps.lng = lng;
+    setGpsText(lat, lng, false);
+    try{
+      var fd = new FormData(); fd.append('action','save_gps'); fd.append('latitude', lat); fd.append('longitude', lng);
+      var res = await fetch('../api/reports.php', {method:'POST', body:fd});
+      var data = await res.json();
+      if(data.status==='success'){
+        responderGps.lat = data.lat; responderGps.lng = data.lng;
+        setGpsText(data.lat, data.lng, true);
+        alert('GPS location saved.');
+      } else {
+        alert(data.message || 'Could not save GPS location.');
+      }
+    } catch(e){
+      alert('Could not save GPS location.');
+    }
+    btn.disabled = false; btn.innerHTML = prev;
+  }, function(){
+    btn.disabled = false; btn.innerHTML = prev;
+    alert('Location access was denied.');
+  }, {enableHighAccuracy:true, timeout:12000, maximumAge:0});
+}
+
+function openNavigation(lat, lng){
+  if(lat === null || lng === null || typeof lat === 'undefined' || typeof lng === 'undefined' || lat === '' || lng === ''){
+    alert('This report has no GPS coordinates.');
+    return;
+  }
+  var url = 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(lat + ',' + lng);
+  if (responderGps.lat !== null && responderGps.lng !== null) {
+    url += '&origin=' + encodeURIComponent(responderGps.lat + ',' + responderGps.lng);
+  }
+  window.open(url, '_blank');
+}
+
+async function acceptAssignment(id,btn){
   btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i>';
   try{
-    var fd=new FormData(); fd.append('action','assign_report'); fd.append('report_id',id);
+    var fd=new FormData(); fd.append('action','accept_assignment'); fd.append('report_id',id);
     var res=await fetch('../api/reports.php',{method:'POST',body:fd});
     var data=await res.json();
     if(data.status==='success') location.reload();
-    else{ alert(data.message||'Error.'); btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Assign to Me'; }
-  }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Assign to Me'; }
+    else{ alert(data.message||'Error.'); btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Accept Assignment'; }
+  }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Accept Assignment'; }
+}
+
+async function markResponded(id,btn){
+  btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i>';
+  try{
+    var fd=new FormData(); fd.append('action','report_responded'); fd.append('report_id',id);
+    var res=await fetch('../api/reports.php',{method:'POST',body:fd});
+    var data=await res.json();
+    if(data.status==='success') location.reload();
+    else{ alert(data.message||'Error.'); btn.disabled=false; btn.innerHTML='<i class="fas fa-bell"></i> Responded to LGU'; }
+  }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-bell"></i> Responded to LGU'; }
 }
 
 async function resolve(id,btn){

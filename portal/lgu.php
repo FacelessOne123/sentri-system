@@ -115,7 +115,7 @@ if ($view === 'responders') {
                    u.barangay_name,u.is_approved,
                    COUNT(r.id) as active_count
             FROM users u
-            LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status IN('dangerous','caution')
+            LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status='dangerous'
             WHERE u.role='first_responder'
             GROUP BY u.id
             ORDER BY u.is_approved ASC, u.responder_type, u.org_name
@@ -208,7 +208,7 @@ if ($view === 'responders') {
                    u.barangay_name,u.is_approved,
                    COUNT(r.id) as active_count
             FROM users u
-            LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status IN('dangerous','caution')
+            LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status='dangerous'
             WHERE u.role='first_responder'
             GROUP BY u.id
             ORDER BY u.is_approved ASC, u.responder_type, u.org_name
@@ -498,9 +498,9 @@ tr:hover td{background:#fafafa;}
   .two-col{grid-template-columns:1fr;}
 }
 @media(max-width:860px){
-  :root{--sidebar-w:100vw;}
-  .sidebar{width:100vw;max-width:100vw;transform:translateX(-100%);}
-  .sidebar.open{transform:translateX(0);}
+  :root{--sidebar-w:256px;}
+  .sidebar{width:100dvw;max-width:100dvw;left:0;right:0;transform:translate3d(-100%,0,0);}
+  .sidebar.open{transform:translate3d(0,0,0);}
   .sb-close{display:flex;}
   .main{margin-left:0;}
   .ham-btn{display:flex;}
@@ -508,6 +508,7 @@ tr:hover td{background:#fafafa;}
   .content{padding:16px;}
   .topbar{padding:0 16px;}
 }
+@media(max-width:860px){body.sidebar-open .main{display:none;}body.sidebar-open .overlay{z-index:1190;}}
 @media(max-width:700px){
   [style*="grid-template-columns:340px"]{grid-template-columns:1fr !important;}
   .map-stats{grid-template-columns:1fr 1fr;}
@@ -1099,6 +1100,7 @@ function closeSidebar(){
   document.getElementById('overlay').classList.remove('show');
   document.body.style.overflow='';
 }
+
 // ── Report Actions ──────────────────────────────────────────────────────────
 var _lguRptId = null;
 function lguViewReport(id,title,category,status,barangay,reporter,date,desc){
