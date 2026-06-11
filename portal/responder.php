@@ -302,7 +302,7 @@ tr:hover td{background:#fafafa;}
 .nav-modal-head h3{font-size:0.94rem;font-weight:800;}
 .nav-modal-close{background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted);}
 #navModalMap{height:400px;width:100%;background:#f5e8e8;overflow:hidden;position:relative;}
-#navMapInner{position:absolute;top:50%;left:50%;width:145%;height:145%;margin-top:-72.5%;margin-left:-72.5%;transition:transform 0.2s linear;transform-origin:50% 50%;}
+#navMapInner{position:absolute;top:50%;left:50%;width:145%;height:145%;transform-origin:50% 50%;transform:translate(-50%,-50%) rotate(0deg);transition:transform 0.2s linear;}
 .nav-arrow-icon{width:0;height:0;border-left:9px solid transparent;border-right:9px solid transparent;border-bottom:22px solid #2563eb;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4));transition:transform 0.2s linear;}
 .nav-modal-info .nav-arrived{color:#16a34a;font-weight:800;}
 .nav-modal-info{padding:10px 16px;font-size:0.8rem;color:var(--muted);border-top:1px solid var(--border);display:flex;gap:16px;flex-wrap:wrap;}
@@ -782,7 +782,7 @@ function ensureNavMap(){
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'\u00a9 OpenStreetMap'}).addTo(navMap);
   }
   if(navLayer){ navMap.removeLayer(navLayer); navLayer=null; }
-  document.getElementById('navMapInner').style.transform='rotate(0deg)';
+  document.getElementById('navMapInner').style.transform='translate(-50%,-50%) rotate(0deg)';
 }
 function haversine(lat1,lon1,lat2,lon2){
   var R=6371000, toRad=function(d){return d*Math.PI/180;};
@@ -807,7 +807,7 @@ function onNavOrientation(e){
   applyNavRotation();
 }
 function applyNavRotation(){
-  document.getElementById('navMapInner').style.transform='rotate('+(-navHeading)+'deg)';
+  document.getElementById('navMapInner').style.transform='translate(-50%,-50%) rotate('+(-navHeading)+'deg)';
   if(navOrigMarker){
     var el=navOrigMarker.getElement();
     if(el){ var arrow=el.querySelector('.nav-arrow-icon'); if(arrow) arrow.style.transform='rotate('+navHeading+'deg)'; }
