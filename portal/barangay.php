@@ -28,11 +28,18 @@ function cq($conn,$sql,$types='',$params=[]){
     $s->execute();$s->bind_result($n);$s->fetch();$s->close();return(int)$n;
 }
 
-// Stats — show all reports (community-wide, no barangay filter)
-$total   = cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
-$danger  = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0");
-$caution = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='caution' AND is_archived=0");
-$safe    = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' AND is_archived=0");
+// Stats — scoped to this barangay official's assigned barangay (falls back to community-wide if none set)
+if ($brgy) {
+    $total   = cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0 AND barangay=?","s",[$brgy]);
+    $danger  = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0 AND barangay=?","s",[$brgy]);
+    $caution = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='caution' AND is_archived=0 AND barangay=?","s",[$brgy]);
+    $safe    = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' AND is_archived=0 AND barangay=?","s",[$brgy]);
+} else {
+    $total   = cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
+    $danger  = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous' AND is_archived=0");
+    $caution = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='caution' AND is_archived=0");
+    $safe    = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='safe' AND is_archived=0");
+}
 
 $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'fa-water','fire'=>'fa-fire','health'=>'fa-heart-pulse','infrastructure'=>'fa-road-barrier','other'=>'fa-circle-exclamation'];
 $type_icons = ['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
@@ -48,7 +55,9 @@ if (in_array($view, ['overview','reports'])) {
     $bc = $conn->query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='$db_b' AND TABLE_NAME='reports' AND COLUMN_NAME='escalated_to_lgu'");
     $has_esc_col = ($bc && $bc->num_rows > 0);
     $esc_sel = $has_esc_col ? ',r.escalated_to_lgu' : ',0 AS escalated_to_lgu';
-    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
+    $brgy_where = $brgy ? " AND r.barangay=?" : "";
+    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.description{$esc_sel},u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0{$brgy_where} ORDER BY FIELD(r.status,'dangerous','caution','safe'),r.created_at DESC LIMIT $limit");
+    if ($brgy) { $s->bind_param("s", $brgy); }
     $s->execute(); $res=$s->get_result();
     while($row=$res->fetch_assoc()) $reports[]=$row;
     $s->close();
@@ -84,12 +93,16 @@ if ($view === 'residents') {
 
 $map_reports = [];
 if ($view === 'map') {
-    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL ORDER BY r.created_at DESC LIMIT 500");
+    $brgy_where = $brgy ? " AND r.barangay=?" : "";
+    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL{$brgy_where} ORDER BY r.created_at DESC LIMIT 500");
+    if ($brgy) { $s->bind_param("s", $brgy); }
     $s->execute(); $res=$s->get_result();
     while($row=$res->fetch_assoc()) $map_reports[]=$row;
     $s->close();
 }
-$map_total_all = cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
+$map_total_all = $brgy
+    ? cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0 AND barangay=?","s",[$brgy])
+    : cq($conn,"SELECT COUNT(*) FROM reports WHERE is_archived=0");
 
 $nav_items = [
     'overview'  => ['icon'=>'fa-gauge',           'label'=>'Dashboard'],
