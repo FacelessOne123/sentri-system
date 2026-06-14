@@ -98,16 +98,36 @@ function evaluate_password_hashing($conn): array {
 
 function evaluate_security_headers(): array {
     $headers = get_response_header_names();
-    $expected = ['content-security-policy', 'x-frame-options', 'x-content-type-options', 'referrer-policy', 'strict-transport-security'];
-    $found = array_filter($expected, fn($header) => array_key_exists($header, $headers));
+    $required = [
+        'content-security-policy'   => 'Content-Security-Policy',
+        'x-frame-options'           => 'X-Frame-Options',
+        'x-content-type-options'    => 'X-Content-Type-Options',
+        'referrer-policy'           => 'Referrer-Policy',
+        'strict-transport-security' => 'Strict-Transport-Security',
+    ];
+    $found   = [];
+    $missing = [];
+    foreach ($required as $key => $label) {
+        if (array_key_exists($key, $headers)) {
+            $found[] = $label;
+        } else {
+            $missing[] = $label;
+        }
+    }
     $count = count($found);
+    if ($count >= 5) {
+        return ['status' => 'passed', 'detail' => 'All security headers present: ' . implode(', ', $found) . '.'];
+    }
     if ($count >= 3) {
-        return ['status' => 'passed', 'detail' => 'Multiple security headers are present on the response.'];
+        return [
+            'status' => 'warning',
+            'detail' => 'Present: ' . implode(', ', $found) . '. Missing: ' . implode(', ', $missing) . '.',
+        ];
     }
-    if ($count >= 1) {
-        return ['status' => 'warning', 'detail' => 'Only a few security headers are present. Add more response headers for better protection.'];
-    }
-    return ['status' => 'critical', 'detail' => 'No standard security headers were detected on this response.'];
+    return [
+        'status' => 'critical',
+        'detail' => $count . '/5 headers found. Missing: ' . implode(', ', $missing) . '.',
+    ];
 }
 
 function evaluate_upload_restrictions($conn): array {
