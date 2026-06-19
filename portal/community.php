@@ -1,5 +1,5 @@
 <?php
-session_start();
+session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
 require_once __DIR__ . '/../config/auth.php';
 require_role(['community','user']);
 require_once __DIR__ . '/../config/db.php';
@@ -406,6 +406,47 @@ body.dark .detail-map-btn{background:#1f3a5f;color:var(--blue-accent);border-col
   .stats-row{grid-template-columns:1fr 1fr;}.post-btn span{display:none;}.post-btn{padding:10px 13px;}
   .modal-row,.form-row{grid-template-columns:1fr;}.contacts-grid{grid-template-columns:1fr;}.profile-grid{grid-template-columns:1fr;}
 }
+
+/* ── Quick Report Form ── */
+.qs-label{font-size:.79rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px;display:flex;align-items:center;gap:8px;}
+.qs-num{background:var(--blue);color:#fff;width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:800;flex-shrink:0;}
+.form-section{margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border);}
+.form-section:last-of-type{border-bottom:none;padding-bottom:0;}
+.severity-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+.sev-btn{border:2.5px solid var(--input-border);border-radius:14px;padding:18px 6px;text-align:center;cursor:pointer;transition:all .2s;background:var(--input-bg);display:flex;flex-direction:column;align-items:center;gap:7px;-webkit-tap-highlight-color:transparent;user-select:none;}
+.sev-btn:hover{transform:translateY(-2px);}
+.sev-btn i{font-size:1.7rem;}
+.sev-btn span{font-size:.8rem;font-weight:700;color:var(--text);}
+.sev-btn.dangerous i{color:var(--red);}.sev-btn.caution i{color:var(--orange);}.sev-btn.safe i{color:var(--green);}
+.sev-btn.dangerous.selected{border-color:var(--red);background:#fff0f0;box-shadow:0 0 0 3px rgba(229,62,62,.15);}
+.sev-btn.caution.selected{border-color:var(--orange);background:#fff8f0;box-shadow:0 0 0 3px rgba(221,107,32,.15);}
+.sev-btn.safe.selected{border-color:var(--green);background:#f0fff4;box-shadow:0 0 0 3px rgba(56,161,105,.15);}
+body.dark .sev-btn.dangerous.selected{background:#3d1f1f;}body.dark .sev-btn.caution.selected{background:#2e2010;}body.dark .sev-btn.safe.selected{background:#1a2e24;}
+.cat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+.cat-opt{border:2px solid var(--input-border);border-radius:11px;padding:11px 5px;text-align:center;cursor:pointer;transition:all .2s;background:var(--input-bg);display:flex;flex-direction:column;align-items:center;gap:5px;-webkit-tap-highlight-color:transparent;user-select:none;}
+.cat-opt:hover{border-color:var(--blue-accent);transform:translateY(-1px);}
+.cat-opt i{font-size:1.2rem;color:var(--blue-accent);}
+.cat-opt span{font-size:.7rem;font-weight:600;color:var(--text);}
+.cat-opt.selected{border-color:var(--blue);background:#ebf2ff;box-shadow:0 0 0 2px rgba(58,141,255,.15);}
+body.dark .cat-opt.selected{background:#1f3a5f;}
+.loc-auto-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
+.locate-btn-big{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border:2px solid var(--blue-accent);border-radius:10px;font-size:.88rem;font-weight:700;color:var(--blue);background:#f0f6ff;cursor:pointer;font-family:'Poppins',sans-serif;transition:all .2s;}
+.locate-btn-big:hover{background:#dbeafe;transform:translateY(-1px);}
+.locate-btn-big:disabled{opacity:.6;cursor:not-allowed;transform:none;}
+body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
+.loc-details-toggle{margin-top:10px;font-size:.81rem;font-weight:600;color:var(--blue-accent);cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none;}
+.loc-details-toggle:hover{color:var(--blue);}
+.loc-details-toggle i{transition:transform .25s;}
+.loc-details-panel{flex-direction:column;gap:8px;}
+.map-pick-btn{margin-top:4px;display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.81rem;font-weight:600;color:var(--muted);background:var(--card);cursor:pointer;font-family:'Poppins',sans-serif;transition:all .2s;}
+.map-pick-btn:hover{border-color:var(--blue-accent);color:var(--blue);}
+.optional-section{background:var(--bg);border-radius:12px;padding:12px 14px;margin-bottom:16px;}
+.opt-toggle{font-size:.81rem;font-weight:600;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none;}
+.opt-toggle i{transition:transform .25s;}
+.opt-toggle:hover{color:var(--text);}
+.opt-panel{flex-direction:column;gap:10px;}
+.form-section input[type=text],.form-section textarea{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;font-family:'Poppins',sans-serif;resize:vertical;background:var(--input-bg);color:var(--text);transition:.2s;box-sizing:border-box;}
+.form-section input[type=text]:focus,.form-section textarea:focus{border-color:var(--blue-accent);background:var(--input-focus);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
 </style>
 </head>
 <body>
@@ -612,55 +653,87 @@ body.dark .detail-map-btn{background:#1f3a5f;color:var(--blue-accent);border-col
 <div class="modal-overlay" id="modalOverlay" onclick="outsideClose(event)">
   <div class="modal">
     <button class="modal-close" onclick="closeModal()"><i class="fas fa-xmark"></i></button>
-    <h2><i class="fas fa-map-pin" style="color:var(--blue);margin-right:8px;"></i>Post a Safety Report</h2>
-    <p class="subtitle">Let the community know what you've observed</p>
+    <h2><i class="fas fa-triangle-exclamation" style="color:var(--red);margin-right:8px;"></i>Report an Incident</h2>
+    <p class="subtitle">Quick — takes under 30 seconds</p>
     <div id="modalMsg" class="modal-msg"></div>
     <form id="reportForm" novalidate>
-      <div class="form-group"><label>Report Title *</label><input type="text" id="r_title" placeholder="e.g. Flooding near market area" maxlength="255" required></div>
-      <div class="form-group"><label>Location Status *</label>
-        <div class="status-grid">
-          <div class="status-opt dangerous" onclick="selectStatus('dangerous')" id="opt_dangerous"><i class="fas fa-circle-exclamation"></i><span>Dangerous</span></div>
-          <div class="status-opt caution"   onclick="selectStatus('caution')"   id="opt_caution"><i class="fas fa-triangle-exclamation"></i><span>Caution</span></div>
-          <div class="status-opt safe"      onclick="selectStatus('safe')"      id="opt_safe"><i class="fas fa-circle-check"></i><span>Safe</span></div>
+
+      <!-- 1 · Severity -->
+      <div class="form-section">
+        <div class="qs-label"><span class="qs-num">1</span>How serious is it?</div>
+        <div class="severity-row">
+          <div class="sev-btn dangerous" onclick="selectStatus('dangerous')" id="opt_dangerous"><i class="fas fa-circle-exclamation"></i><span>Dangerous</span></div>
+          <div class="sev-btn caution"   onclick="selectStatus('caution')"   id="opt_caution"><i class="fas fa-triangle-exclamation"></i><span>Caution</span></div>
+          <div class="sev-btn safe"      onclick="selectStatus('safe')"      id="opt_safe"><i class="fas fa-circle-check"></i><span>Safe</span></div>
         </div>
         <input type="hidden" id="r_status">
       </div>
-      <div class="form-group"><label>Category *</label>
-        <select id="r_category"><option value="">-- Select --</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
+
+      <!-- 2 · Category -->
+      <div class="form-section">
+        <div class="qs-label"><span class="qs-num">2</span>What type of incident?</div>
+        <div class="cat-grid">
+          <div class="cat-opt" onclick="selectCategory('crime')"          id="cat_crime"><i class="fas fa-user-shield"></i><span>Crime</span></div>
+          <div class="cat-opt" onclick="selectCategory('accident')"       id="cat_accident"><i class="fas fa-car-burst"></i><span>Accident</span></div>
+          <div class="cat-opt" onclick="selectCategory('flooding')"       id="cat_flooding"><i class="fas fa-water"></i><span>Flooding</span></div>
+          <div class="cat-opt" onclick="selectCategory('fire')"           id="cat_fire"><i class="fas fa-fire"></i><span>Fire</span></div>
+          <div class="cat-opt" onclick="selectCategory('health')"         id="cat_health"><i class="fas fa-heart-pulse"></i><span>Health</span></div>
+          <div class="cat-opt" onclick="selectCategory('infrastructure')" id="cat_infrastructure"><i class="fas fa-road"></i><span>Road</span></div>
+          <div class="cat-opt" onclick="selectCategory('other')"          id="cat_other"><i class="fas fa-circle-info"></i><span>Other</span></div>
+        </div>
+        <input type="hidden" id="r_category">
       </div>
-      <div class="form-group"><label>Specific Location *</label><input type="text" id="r_location" placeholder="e.g. Corner Rizal St. & Mabini Ave." maxlength="255" required></div>
-      <div class="modal-row">
-        <div class="form-group"><label>Barangay</label><input type="text" id="r_barangay" placeholder="Barangay" maxlength="150"></div>
-        <div class="form-group"><label>City / Municipality *</label><input type="text" id="r_city" placeholder="e.g. Imus, Cavite" maxlength="150" required></div>
+
+      <!-- 3 · Description -->
+      <div class="form-section">
+        <div class="qs-label"><span class="qs-num">3</span>What's happening?</div>
+        <textarea id="r_description" placeholder="Briefly describe the situation…" rows="3" maxlength="2000"></textarea>
       </div>
-      <div class="form-group"><label>Province</label><input type="text" id="r_province" placeholder="e.g. Cavite" maxlength="150"></div>
-      <div class="form-group"><label><i class="fas fa-map-location-dot" style="color:var(--blue-accent);margin-right:5px;"></i>Pin Location on Map</label>
-        <div class="picker-section">
-          <div class="picker-header"><i class="fas fa-crosshairs"></i> Click to drop a pin · Drag to adjust · Scroll to zoom</div>
-          <div id="pickerMap"></div>
-          <div class="picker-toolbar">
-            <button type="button" class="locate-btn" id="locateBtn" onclick="useMyLocation()"><i class="fas fa-location-crosshairs"></i> Use My Location</button>
-            <button type="button" class="clear-pin-btn" id="clearPinBtn" onclick="clearPin()" style="display:none;"><i class="fas fa-xmark"></i> Clear</button>
-            <span class="pin-status" id="pinStatus"><i class="fas fa-circle-info"></i> No pin placed</span>
+
+      <!-- 4 · Where -->
+      <div class="form-section">
+        <div class="qs-label"><span class="qs-num">4</span>Where?</div>
+        <div class="loc-auto-row">
+          <button type="button" class="locate-btn-big" id="locateBtn" onclick="useMyLocation()"><i class="fas fa-location-crosshairs"></i> Use My Location</button>
+          <span class="pin-status" id="pinStatus"><i class="fas fa-circle-info"></i> No pin set</span>
+        </div>
+        <input type="text" id="r_city" placeholder="City / Municipality *" maxlength="150">
+        <div class="loc-details-toggle" onclick="toggleLocDetails()"><i class="fas fa-chevron-right" id="locChevron"></i> Add specific address</div>
+        <div id="locDetails" class="loc-details-panel" style="display:none;margin-top:10px;">
+          <input type="text" id="r_location" placeholder="Street / Area (e.g. Rizal St. near Market)" maxlength="255">
+          <div class="modal-row">
+            <input type="text" id="r_barangay" placeholder="Barangay" maxlength="150">
+            <input type="text" id="r_province" placeholder="Province" maxlength="150">
           </div>
-          <div class="radius-row">
-            <label><i class="fas fa-circle-dot" style="color:var(--blue-accent);margin-right:4px;"></i>Affected radius:</label>
-            <input type="range" id="radiusSlider" min="50" max="3000" step="50" value="200" oninput="onRadiusChange(this.value)">
-            <span class="radius-val" id="radiusVal">200 m</span>
+          <button type="button" class="map-pick-btn" id="mapPickBtn" onclick="toggleMapPicker()"><i class="fas fa-map-pin"></i> Drop a Pin on Map</button>
+          <div id="mapPickerSection" style="display:none;" class="picker-section">
+            <div class="picker-header"><i class="fas fa-crosshairs"></i> Click to drop a pin · Drag to move · Scroll to zoom</div>
+            <div id="pickerMap"></div>
+            <div class="picker-toolbar">
+              <button type="button" class="clear-pin-btn" id="clearPinBtn" onclick="clearPin()" style="display:none;"><i class="fas fa-xmark"></i> Clear pin</button>
+              <span class="pin-status" id="pinStatus2" style="margin-left:auto;"></span>
+            </div>
+            <div class="radius-row">
+              <label><i class="fas fa-circle-dot" style="color:var(--blue-accent);margin-right:4px;"></i>Affected radius:</label>
+              <input type="range" id="radiusSlider" min="50" max="3000" step="50" value="200" oninput="onRadiusChange(this.value)">
+              <span class="radius-val" id="radiusVal">200 m</span>
+            </div>
           </div>
         </div>
         <input type="hidden" id="r_latitude"><input type="hidden" id="r_longitude"><input type="hidden" id="r_radius_m" value="200">
       </div>
-      <div class="form-group"><label>Description *</label><textarea id="r_description" placeholder="Describe what you observed…" rows="4" maxlength="2000" required></textarea></div>
-      <div class="form-group">
-        <label><i class="fas fa-camera" style="color:var(--blue-accent);margin-right:5px;"></i>Attach Photos <span style="font-weight:400;color:var(--muted);font-size:.8rem;">(optional · up to 3 · max 5 MB each)</span></label>
-        <div class="photo-upload-area" onclick="document.getElementById('r_photos').click()">
-          <i class="fas fa-cloud-arrow-up" style="font-size:1.5rem;color:var(--blue-accent);display:block;margin-bottom:5px;"></i>
-          Click to choose photos or drag &amp; drop<br><span style="font-size:.75rem;color:var(--muted);">JPG, PNG, WEBP — max 5 MB each</span>
+
+      <!-- Optional: Title & Photos -->
+      <div class="optional-section">
+        <div class="opt-toggle" onclick="toggleOptional()"><i class="fas fa-chevron-right" id="optChevron"></i> Title &amp; Photos (optional)</div>
+        <div id="optionalDetails" class="opt-panel" style="display:none;margin-top:12px;">
+          <input type="text" id="r_title" placeholder="Report title (auto-generated if blank)" maxlength="255" style="width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;font-family:'Poppins',sans-serif;background:var(--input-bg);color:var(--text);transition:.2s;box-sizing:border-box;">
+          <div class="photo-upload-area" onclick="document.getElementById('r_photos').click()"><i class="fas fa-camera" style="font-size:1.3rem;color:var(--blue-accent);display:block;margin-bottom:5px;"></i>Attach Photos &middot; up to 3 &middot; max 5 MB each<br><span style="font-size:.75rem;color:var(--muted);">JPG, PNG, WEBP</span></div>
+          <input type="file" id="r_photos" accept="image/jpeg,image/png,image/webp" multiple style="display:none;" onchange="onPhotosChosen(this)">
+          <div id="photoPreviewRow" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
         </div>
-        <input type="file" id="r_photos" accept="image/jpeg,image/png,image/webp" multiple style="display:none;" onchange="onPhotosChosen(this)">
-        <div id="photoPreviewRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;"></div>
       </div>
+
       <div class="modal-actions">
         <button type="button" class="btn-cancel" onclick="closeModal()">Cancel</button>
         <button type="submit" class="btn-submit" id="submitBtn"><i class="fas fa-paper-plane"></i> Submit Report</button>
@@ -814,22 +887,152 @@ function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.5
 
 /* Map picker */
 let pickerMap=null,pickerMarker=null,pickerCircle=null,pickerRadius=200;
-function initPickerMap(){if(pickerMap){setTimeout(()=>pickerMap.invalidateSize(),60);return;}const lat=SAVED_LAT!==null?SAVED_LAT:14.5995,lng=SAVED_LNG!==null?SAVED_LNG:120.9842,zoom=SAVED_LAT!==null?15:11;pickerMap=L.map('pickerMap').setView([lat,lng],zoom);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap',maxZoom:19}).addTo(pickerMap);pickerMap.on('click',e=>placePin(e.latlng.lat,e.latlng.lng,true));setTimeout(()=>{pickerMap.invalidateSize();if(SAVED_LAT!==null&&SAVED_LNG!==null)placePin(SAVED_LAT,SAVED_LNG,true);},150);}
-function placePin(lat,lng,doRG){document.getElementById('r_latitude').value=lat;document.getElementById('r_longitude').value=lng;if(pickerMarker)pickerMap.removeLayer(pickerMarker);if(pickerCircle)pickerMap.removeLayer(pickerCircle);pickerCircle=L.circle([lat,lng],{radius:pickerRadius,color:'#3a8dff',fillColor:'rgba(58,141,255,.12)',fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(pickerMap);pickerMarker=L.marker([lat,lng],{icon:L.divIcon({html:`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 30 38"><path d="M15 0C6.716 0 0 6.716 0 15c0 10 15 23 15 23S30 25 30 15 23.284 0 15 0z" fill="#3a8dff" stroke="white" stroke-width="2"/><circle cx="15" cy="15" r="6" fill="white" opacity=".9"/></svg>`,className:'',iconSize:[30,38],iconAnchor:[15,38]}),draggable:true}).addTo(pickerMap);pickerMarker.on('dragend',ev=>{const p=ev.target.getLatLng();placePin(p.lat,p.lng,true);});const ps=document.getElementById('pinStatus');ps.className='pin-status set';ps.innerHTML=`<i class="fas fa-circle-check"></i> ${lat.toFixed(5)}, ${lng.toFixed(5)}`;document.getElementById('clearPinBtn').style.display='inline-flex';pickerMap.setView([lat,lng],Math.max(pickerMap.getZoom(),15));if(doRG)reverseGeocode(lat,lng);}
-function clearPin(){if(pickerMarker){pickerMap.removeLayer(pickerMarker);pickerMarker=null;}if(pickerCircle){pickerMap.removeLayer(pickerCircle);pickerCircle=null;}document.getElementById('r_latitude').value='';document.getElementById('r_longitude').value='';document.getElementById('r_radius_m').value='200';document.getElementById('radiusSlider').value=200;document.getElementById('radiusVal').textContent='200 m';pickerRadius=200;const ps=document.getElementById('pinStatus');ps.className='pin-status';ps.innerHTML='<i class="fas fa-circle-info"></i> No pin placed';document.getElementById('clearPinBtn').style.display='none';}
+function initPickerMap(){
+  if(pickerMap){setTimeout(()=>pickerMap.invalidateSize(),60);return;}
+  const curLat=parseFloat(document.getElementById('r_latitude').value)||null;
+  const curLng=parseFloat(document.getElementById('r_longitude').value)||null;
+  const lat=curLat!==null?curLat:(SAVED_LAT!==null?SAVED_LAT:14.5995);
+  const lng=curLng!==null?curLng:(SAVED_LNG!==null?SAVED_LNG:120.9842);
+  const zoom=(curLat!==null||SAVED_LAT!==null)?15:11;
+  pickerMap=L.map('pickerMap').setView([lat,lng],zoom);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap',maxZoom:19}).addTo(pickerMap);
+  pickerMap.on('click',e=>placePin(e.latlng.lat,e.latlng.lng,true));
+  setTimeout(()=>{
+    pickerMap.invalidateSize();
+    if(curLat!==null)placePin(curLat,curLng,false);
+    else if(SAVED_LAT!==null)placePin(SAVED_LAT,SAVED_LNG,false);
+  },150);
+}
+function placePin(lat,lng,doRG){
+  document.getElementById('r_latitude').value=lat;
+  document.getElementById('r_longitude').value=lng;
+  if(pickerMap){
+    if(pickerMarker)pickerMap.removeLayer(pickerMarker);
+    if(pickerCircle)pickerMap.removeLayer(pickerCircle);
+    pickerCircle=L.circle([lat,lng],{radius:pickerRadius,color:'#3a8dff',fillColor:'rgba(58,141,255,.12)',fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(pickerMap);
+    pickerMarker=L.marker([lat,lng],{icon:L.divIcon({html:`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 30 38"><path d="M15 0C6.716 0 0 6.716 0 15c0 10 15 23 15 23S30 25 30 15 23.284 0 15 0z" fill="#3a8dff" stroke="white" stroke-width="2"/><circle cx="15" cy="15" r="6" fill="white" opacity=".9"/></svg>`,className:'',iconSize:[30,38],iconAnchor:[15,38]}),draggable:true}).addTo(pickerMap);
+    pickerMarker.on('dragend',ev=>{const p=ev.target.getLatLng();placePin(p.lat,p.lng,true);});
+    pickerMap.setView([lat,lng],Math.max(pickerMap.getZoom(),15));
+  }
+  const ps=document.getElementById('pinStatus');
+  if(ps){ps.className='pin-status set';ps.innerHTML=`<i class="fas fa-circle-check"></i> ${lat.toFixed(5)}, ${lng.toFixed(5)}`;}
+  const ps2=document.getElementById('pinStatus2');
+  if(ps2){ps2.className='pin-status set';ps2.innerHTML=`<i class="fas fa-circle-check"></i> Pinned`;}
+  document.getElementById('clearPinBtn').style.display='inline-flex';
+  if(doRG)reverseGeocode(lat,lng);
+}
+function clearPin(){
+  if(pickerMap){
+    if(pickerMarker){pickerMap.removeLayer(pickerMarker);}
+    if(pickerCircle){pickerMap.removeLayer(pickerCircle);}
+  }
+  pickerMarker=null;pickerCircle=null;
+  document.getElementById('r_latitude').value='';
+  document.getElementById('r_longitude').value='';
+  document.getElementById('r_radius_m').value='200';
+  const rs=document.getElementById('radiusSlider');if(rs)rs.value=200;
+  const rv=document.getElementById('radiusVal');if(rv)rv.textContent='200 m';
+  pickerRadius=200;
+  const ps=document.getElementById('pinStatus');
+  if(ps){ps.className='pin-status';ps.innerHTML='<i class="fas fa-circle-info"></i> No pin set';}
+  const ps2=document.getElementById('pinStatus2');
+  if(ps2){ps2.className='pin-status';ps2.innerHTML='';}
+  document.getElementById('clearPinBtn').style.display='none';
+}
 function onRadiusChange(val){pickerRadius=parseInt(val);document.getElementById('radiusVal').textContent=pickerRadius>=1000?(pickerRadius/1000).toFixed(1)+' km':pickerRadius+' m';document.getElementById('r_radius_m').value=pickerRadius;if(pickerCircle)pickerCircle.setRadius(pickerRadius);}
 async function reverseGeocode(lat,lng){try{const res=await fetch(`../api/geocode_proxy.php?lat=${lat}&lon=${lng}`);const d=await res.json();if(d&&d.address){const a=d.address;if(!document.getElementById('r_location').value)document.getElementById('r_location').value=a.road||a.hamlet||a.suburb||'';if(!document.getElementById('r_barangay').value)document.getElementById('r_barangay').value=a.suburb||a.village||a.quarter||a.neighbourhood||'';if(!document.getElementById('r_city').value)document.getElementById('r_city').value=a.city||a.town||a.municipality||'';if(!document.getElementById('r_province').value)document.getElementById('r_province').value=a.state||a.province||'';}}catch{}}
-function useMyLocation(){const btn=document.getElementById('locateBtn');if(SAVED_LAT!==null&&SAVED_LNG!==null){placePin(SAVED_LAT,SAVED_LNG,true);return;}if(!navigator.geolocation){alert('Geolocation not supported. Pin manually on the map.');return;}btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Locating…';btn.disabled=true;navigator.geolocation.getCurrentPosition(pos=>{btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';btn.disabled=false;placePin(pos.coords.latitude,pos.coords.longitude,true);},err=>{btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';btn.disabled=false;alert(err.code===1?'Location denied. Allow access or pin manually.':'Location timed out.');},{enableHighAccuracy:true,timeout:10000,maximumAge:60000});}
+function useMyLocation(){
+  const btn=document.getElementById('locateBtn');
+  if(SAVED_LAT!==null&&SAVED_LNG!==null){placePin(SAVED_LAT,SAVED_LNG,true);return;}
+  if(!navigator.geolocation){
+    const cf=document.getElementById('r_city');if(cf)cf.focus();
+    return;
+  }
+  btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Locating…';
+  btn.disabled=true;
+  navigator.geolocation.getCurrentPosition(pos=>{
+    btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';
+    btn.disabled=false;
+    placePin(pos.coords.latitude,pos.coords.longitude,true);
+  },err=>{
+    btn.innerHTML='<i class="fas fa-location-crosshairs"></i> Use My Location';
+    btn.disabled=false;
+    const cf=document.getElementById('r_city');
+    if(cf){cf.focus();cf.placeholder='Enter your city / municipality';}
+  },{enableHighAccuracy:true,timeout:10000,maximumAge:60000});
+}
 
 /* Post report modal */
-function openModal(){document.getElementById('modalOverlay').classList.add('open');setTimeout(initPickerMap,200);}
-function closeModal(){document.getElementById('modalOverlay').classList.remove('open');document.getElementById('reportForm').reset();clearStatusSelection();document.getElementById('modalMsg').style.display='none';clearPin();document.getElementById('photoPreviewRow').innerHTML='';const ph=document.getElementById('r_photos');if(ph)ph.value='';}
+function openModal(){
+  document.getElementById('modalOverlay').classList.add('open');
+  if(SAVED_LAT!==null&&SAVED_LNG!==null){setTimeout(()=>placePin(SAVED_LAT,SAVED_LNG,true),250);}
+}
+function closeModal(){
+  document.getElementById('modalOverlay').classList.remove('open');
+  document.getElementById('reportForm').reset();
+  clearStatusSelection();
+  document.querySelectorAll('.cat-opt').forEach(el=>el.classList.remove('selected'));
+  document.getElementById('r_category').value='';
+  document.getElementById('modalMsg').style.display='none';
+  clearPin();
+  document.getElementById('photoPreviewRow').innerHTML='';
+  const ph=document.getElementById('r_photos');if(ph)ph.value='';
+  // Reset collapsibles
+  _locOpen=false;_optOpen=false;_mapOpen=false;
+  const ld=document.getElementById('locDetails');if(ld)ld.style.display='none';
+  const od=document.getElementById('optionalDetails');if(od)od.style.display='none';
+  const mp=document.getElementById('mapPickerSection');if(mp)mp.style.display='none';
+  const lc=document.getElementById('locChevron');if(lc)lc.style.transform='';
+  const oc=document.getElementById('optChevron');if(oc)oc.style.transform='';
+  const pb=document.getElementById('mapPickBtn');if(pb)pb.innerHTML='<i class="fas fa-map-pin"></i> Drop a Pin on Map';
+}
 function outsideClose(e){if(e.target===document.getElementById('modalOverlay'))closeModal();}
 function selectStatus(s){clearStatusSelection();document.getElementById('opt_'+s).classList.add('selected');document.getElementById('r_status').value=s;}
 function clearStatusSelection(){['dangerous','caution','safe'].forEach(s=>document.getElementById('opt_'+s).classList.remove('selected'));document.getElementById('r_status').value='';}
+function selectCategory(c){document.querySelectorAll('.cat-opt').forEach(el=>el.classList.remove('selected'));document.getElementById('cat_'+c).classList.add('selected');document.getElementById('r_category').value=c;}
+let _locOpen=false,_optOpen=false,_mapOpen=false;
+function toggleLocDetails(){_locOpen=!_locOpen;const ld=document.getElementById('locDetails');ld.style.display=_locOpen?'flex':'none';document.getElementById('locChevron').style.transform=_locOpen?'rotate(90deg)':'rotate(0deg)';if(_locOpen&&pickerMap)setTimeout(()=>pickerMap.invalidateSize(),100);}
+function toggleMapPicker(){_mapOpen=!_mapOpen;const mp=document.getElementById('mapPickerSection');mp.style.display=_mapOpen?'block':'none';const btn=document.getElementById('mapPickBtn');btn.innerHTML=_mapOpen?'<i class="fas fa-xmark"></i> Hide Map':'<i class="fas fa-map-pin"></i> Drop a Pin on Map';if(_mapOpen){setTimeout(()=>{initPickerMap();if(pickerMap)pickerMap.invalidateSize();},100);}}
+function toggleOptional(){_optOpen=!_optOpen;const od=document.getElementById('optionalDetails');od.style.display=_optOpen?'flex':'none';document.getElementById('optChevron').style.transform=_optOpen?'rotate(90deg)':'rotate(0deg)';}
 function onPhotosChosen(input){const row=document.getElementById('photoPreviewRow');row.innerHTML='';Array.from(input.files).slice(0,3).forEach((file,idx)=>{const reader=new FileReader();reader.onload=e=>{const wrap=document.createElement('div');wrap.className='photo-thumb';const img=document.createElement('img');img.src=e.target.result;img.alt='preview';const btn=document.createElement('button');btn.className='remove-photo';btn.innerHTML='<i class="fas fa-xmark"></i>';btn.onclick=ev=>{ev.stopPropagation();removePhoto(idx);};wrap.appendChild(img);wrap.appendChild(btn);row.appendChild(wrap);};reader.readAsDataURL(file);});}
 function removePhoto(idx){const input=document.getElementById('r_photos');const dt=new DataTransfer();Array.from(input.files).forEach((f,i)=>{if(i!==idx)dt.items.add(f);});input.files=dt.files;onPhotosChosen(input);}
-document.getElementById('reportForm').addEventListener('submit',async function(e){e.preventDefault();const msgEl=document.getElementById('modalMsg'),btn=document.getElementById('submitBtn');const title=document.getElementById('r_title').value.trim(),status=document.getElementById('r_status').value,cat=document.getElementById('r_category').value,loc=document.getElementById('r_location').value.trim(),city=document.getElementById('r_city').value.trim(),desc=document.getElementById('r_description').value.trim();if(!title||!status||!cat||!loc||!city||!desc){showMsg(msgEl,'error','Please fill all required fields and choose a status.');return;}btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Submitting…';const fd=new FormData();fd.append('action','post_report');fd.append('title',title);fd.append('status',status);fd.append('category',cat);fd.append('location_name',loc);fd.append('barangay',document.getElementById('r_barangay').value.trim());fd.append('city',city);fd.append('province',document.getElementById('r_province').value.trim());fd.append('description',desc);fd.append('latitude',document.getElementById('r_latitude').value);fd.append('longitude',document.getElementById('r_longitude').value);fd.append('radius_m',document.getElementById('r_radius_m').value);const ph=document.getElementById('r_photos');if(ph&&ph.files.length)Array.from(ph.files).slice(0,3).forEach(f=>fd.append('photos[]',f));try{const res=await fetch('../api/reports.php',{method:'POST',body:fd});const data=await res.json();if(data.status==='success'){showMsg(msgEl,'success','Report posted!');if(status==='dangerous'&&data.id){const nfd=new FormData();nfd.append('action','notify_report');nfd.append('report_id',data.id);fetch('../api/contacts.php',{method:'POST',body:nfd}).catch(()=>{});}setTimeout(()=>{closeModal();fetchReports();},1000);}else showMsg(msgEl,'error',data.message||'Failed to submit.');}catch{showMsg(msgEl,'error','Network error.');}btn.disabled=false;btn.innerHTML='<i class="fas fa-paper-plane"></i> Submit Report';});
+document.getElementById('reportForm').addEventListener('submit',async function(e){
+  e.preventDefault();
+  const msgEl=document.getElementById('modalMsg'),btn=document.getElementById('submitBtn');
+  const status=document.getElementById('r_status').value;
+  const cat=document.getElementById('r_category').value;
+  const desc=document.getElementById('r_description').value.trim();
+  const city=document.getElementById('r_city').value.trim();
+  if(!status){showMsg(msgEl,'error','Choose a severity level — Step 1.');return;}
+  if(!cat){showMsg(msgEl,'error','Choose an incident type — Step 2.');return;}
+  if(!desc){showMsg(msgEl,'error','Describe what is happening — Step 3.');return;}
+  if(!city){showMsg(msgEl,'error','Enter your city or municipality — Step 4.');return;}
+  // Auto-generate title
+  let title=document.getElementById('r_title').value.trim();
+  if(!title)title=`${ucFirst(status)} ${CL[cat]||'Incident'} in ${city}`;
+  // Auto-fill location_name
+  let loc=document.getElementById('r_location').value.trim();
+  if(!loc){const la=document.getElementById('r_latitude').value,ln=document.getElementById('r_longitude').value;loc=la&&ln?`Near ${parseFloat(la).toFixed(5)}, ${parseFloat(ln).toFixed(5)}`:city;}
+  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Submitting…';
+  const fd=new FormData();
+  fd.append('action','post_report');fd.append('title',title);fd.append('status',status);fd.append('category',cat);
+  fd.append('location_name',loc);fd.append('barangay',document.getElementById('r_barangay').value.trim());
+  fd.append('city',city);fd.append('province',document.getElementById('r_province').value.trim());
+  fd.append('description',desc);fd.append('latitude',document.getElementById('r_latitude').value);
+  fd.append('longitude',document.getElementById('r_longitude').value);fd.append('radius_m',document.getElementById('r_radius_m').value);
+  const ph=document.getElementById('r_photos');
+  if(ph&&ph.files.length)Array.from(ph.files).slice(0,3).forEach(f=>fd.append('photos[]',f));
+  try{
+    const res=await fetch('../api/reports.php',{method:'POST',body:fd});
+    const data=await res.json();
+    if(data.status==='success'){
+      showMsg(msgEl,'success','Report posted!');
+      if(status==='dangerous'&&data.id){const nfd=new FormData();nfd.append('action','notify_report');nfd.append('report_id',data.id);fetch('../api/contacts.php',{method:'POST',body:nfd}).catch(()=>{});}
+      setTimeout(()=>{closeModal();fetchReports();},1000);
+    }else showMsg(msgEl,'error',data.message||'Failed to submit.');
+  }catch{showMsg(msgEl,'error','Network error.');}
+  btn.disabled=false;btn.innerHTML='<i class="fas fa-paper-plane"></i> Submit Report';
+});
 
 /* Report detail */
 function openDetail(id){const r=allReports.find(x=>x.id==id);if(!r)return;const badge=document.getElementById('d_badge');badge.textContent=ucFirst(r.status);badge.className='detail-badge '+r.status;document.getElementById('d_cat_tag').innerHTML=`<i class="fas ${CI[r.category]||'fa-circle-info'}" style="margin-right:5px;"></i>${CL[r.category]||ucFirst(r.category)}`;document.getElementById('d_title').textContent=r.title;const date=new Date(r.created_at).toLocaleDateString('en-PH',{weekday:'short',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});document.getElementById('d_reporter').innerHTML=`Posted by <span>${esc(r.poster_name)}</span> — ${date}`;const phEl=document.getElementById('d_photos');if(r.images&&r.images.length>0){phEl.style.display='flex';phEl.innerHTML=r.images.map((u,i)=>`<div class="detail-photo" onclick="openLightbox('${u.replace(/'/g,'%27')}')"><img src="${esc(u)}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">${r.images.length>1?`<div style="position:absolute;bottom:7px;right:9px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;padding:2px 8px;border-radius:20px;">${i+1}/${r.images.length}</div>`:''}</div>`).join('');}else phEl.style.display='none';const loc=[r.location_name,r.barangay,r.city,r.province].filter(Boolean).join(', ');document.getElementById('d_meta_grid').innerHTML=[{icon:'fa-map-location-dot',color:SC[r.status],label:'Location',value:loc||'—'},{icon:'fa-city',color:'#888',label:'City',value:r.city+(r.province?', '+r.province:'')},{icon:'fa-thumbs-up',color:'#38a169',label:'Votes',value:`👍 ${r.upvotes} &nbsp; 👎 ${r.downvotes}`},{icon:'fa-circle-dot',color:SC[r.status],label:'Radius',value:`${r.radius_m||200} meters`}].map(m=>`<div class="detail-meta-item"><div class="detail-meta-label">${m.label}</div><div class="detail-meta-value"><i class="fas ${m.icon}" style="color:${m.color};"></i>${m.value}</div></div>`).join('');const db=document.getElementById('d_desc_box');if(r.description){db.style.display='';document.getElementById('d_desc').textContent=r.description;}else db.style.display='none';const upV=r.user_vote==='up',dnV=r.user_vote==='down',hp=r.latitude&&r.longitude;document.getElementById('d_footer').innerHTML=`<button class="vote-btn ${upV?'voted':''}" onclick="vote(${r.id},'up')"><i class="fas fa-thumbs-up"></i> ${r.upvotes}</button><button class="vote-btn down ${dnV?'voted':''}" onclick="vote(${r.id},'down')"><i class="fas fa-thumbs-down"></i> ${r.downvotes}</button>${hp?`<button class="detail-map-btn" onclick="closeDetail();openMiniMap(${r.id})"><i class="fas fa-map-pin"></i> View on Map</button>`:''}${r.user_id==MY_USER_ID?`<button class="vote-btn" onclick="closeDetail();deleteReport(${r.id})" style="margin-left:auto;border-color:var(--red);color:var(--red);"><i class="fas fa-trash-can"></i> Delete</button>`:''}`;document.getElementById('detailModal').style.borderLeft=`5px solid ${SC[r.status]||'#ccc'}`;document.getElementById('detailOverlay').classList.add('open');document.body.style.overflow='hidden';}

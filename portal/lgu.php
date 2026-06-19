@@ -1,5 +1,5 @@
 <?php
-session_start();
+session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
 require_once __DIR__ . '/../config/auth.php';
 require_role(['lgu']);
 require_once __DIR__ . '/../config/db.php';
@@ -7,6 +7,7 @@ require_once __DIR__ . '/../config/db.php';
 $uid   = (int)$_SESSION['user_id'];
 $fname = $_SESSION['first_name'];
 $view  = $_GET['view'] ?? 'overview';
+$has_assigned_to = sentri_table_has_column($conn, 'reports', 'assigned_to');
 
 $stmt = $conn->prepare("SELECT email,last_name,org_name,`position`,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
 $stmt->bind_param("i",$uid); $stmt->execute();
@@ -107,17 +108,29 @@ if ($view === 'profile' && $_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['
 // ── RESPONDERS ────────────────────────────────────────────────────────────
 $responders = [];
 if ($view === 'responders') {
-    $s=$conn->prepare("
-        SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
-               u.org_name,u.`position`,u.responder_type,u.municipality,
-               u.barangay_name,u.is_approved,
-               COUNT(r.id) as active_count
-        FROM users u
-        LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status IN('dangerous','caution')
-        WHERE u.role='first_responder'
-        GROUP BY u.id
-        ORDER BY u.is_approved ASC, u.responder_type, u.org_name
-    ");
+    if ($has_assigned_to) {
+        $s=$conn->prepare("
+            SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
+                   u.org_name,u.`position`,u.responder_type,u.municipality,
+                   u.barangay_name,u.is_approved,
+                   COUNT(r.id) as active_count
+            FROM users u
+            LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status='dangerous'
+            WHERE u.role='first_responder'
+            GROUP BY u.id
+            ORDER BY u.is_approved ASC, u.responder_type, u.org_name
+        ");
+    } else {
+        $s=$conn->prepare("
+            SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
+                   u.org_name,u.`position`,u.responder_type,u.municipality,
+                   u.barangay_name,u.is_approved,
+                   0 as active_count
+            FROM users u
+            WHERE u.role='first_responder'
+            ORDER BY u.is_approved ASC, u.responder_type, u.org_name
+        ");
+    }
     $s->execute(); $res=$s->get_result();
     while($row=$res->fetch_assoc()){ $row['active_count']=(int)$row['active_count']; $responders[]=$row; }
     $s->close();
@@ -188,17 +201,29 @@ if ($view === 'profile' && $_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['
 
 $responders = [];
 if ($view === 'responders') {
-    $s = $conn->prepare("
-        SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
-               u.org_name,u.`position`,u.responder_type,u.municipality,
-               u.barangay_name,u.is_approved,
-               COUNT(r.id) as active_count
-        FROM users u
-        LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status IN('dangerous','caution')
-        WHERE u.role='first_responder'
-        GROUP BY u.id
-        ORDER BY u.is_approved ASC, u.responder_type, u.org_name
-    ");
+    if ($has_assigned_to) {
+        $s = $conn->prepare("
+            SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
+                   u.org_name,u.`position`,u.responder_type,u.municipality,
+                   u.barangay_name,u.is_approved,
+                   COUNT(r.id) as active_count
+            FROM users u
+            LEFT JOIN reports r ON r.assigned_to=u.id AND r.is_archived=0 AND r.status='dangerous'
+            WHERE u.role='first_responder'
+            GROUP BY u.id
+            ORDER BY u.is_approved ASC, u.responder_type, u.org_name
+        ");
+    } else {
+        $s = $conn->prepare("
+            SELECT u.id,u.first_name,u.last_name,u.email,u.phone_number,
+                   u.org_name,u.`position`,u.responder_type,u.municipality,
+                   u.barangay_name,u.is_approved,
+                   0 as active_count
+            FROM users u
+            WHERE u.role='first_responder'
+            ORDER BY u.is_approved ASC, u.responder_type, u.org_name
+        ");
+    }
     $s->execute(); $res=$s->get_result();
     while($row=$res->fetch_assoc()) { $row['active_count']=(int)$row['active_count']; $responders[]=$row; }
     $s->close();
@@ -474,8 +499,8 @@ tr:hover td{background:#fafafa;}
 }
 @media(max-width:860px){
   :root{--sidebar-w:256px;}
-  .sidebar{transform:translateX(-100%);}
-  .sidebar.open{transform:translateX(0);}
+  .sidebar{width:100dvw;max-width:100dvw;left:0;right:0;transform:translate3d(-100%,0,0);}
+  .sidebar.open{transform:translate3d(0,0,0);}
   .sb-close{display:flex;}
   .main{margin-left:0;}
   .ham-btn{display:flex;}
@@ -483,6 +508,7 @@ tr:hover td{background:#fafafa;}
   .content{padding:16px;}
   .topbar{padding:0 16px;}
 }
+@media(max-width:860px){body.sidebar-open .main{display:none;}body.sidebar-open .overlay{z-index:1190;}}
 @media(max-width:700px){
   [style*="grid-template-columns:340px"]{grid-template-columns:1fr !important;}
   .map-stats{grid-template-columns:1fr 1fr;}
@@ -795,7 +821,7 @@ tr:hover td{background:#fafafa;}
       </div>
     </div>
     <script>
-    var reports = <?= json_encode(array_map(function($r){ return ['id'=>(int)$r['id'],'title'=>$r['title'],'category'=>$r['category'],'status'=>$r['status'],'barangay'=>$r['barangay']??$r['city']??'','lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],'date'=>date('M j, Y',strtotime($r['created_at'])),'desc'=>$r['description']??'']; }, $map_reports)) ?>;
+    var reports = <?= json_encode(array_map(function($r){ return ['id'=>(int)$r['id'],'title'=>htmlspecialchars($r['title'],ENT_QUOTES),'category'=>$r['category'],'status'=>$r['status'],'barangay'=>htmlspecialchars($r['barangay']??$r['city']??'',ENT_QUOTES),'lat'=>(float)$r['latitude'],'lng'=>(float)$r['longitude'],'date'=>date('M j, Y',strtotime($r['created_at'])),'desc'=>htmlspecialchars($r['description']??'',ENT_QUOTES)]; }, $map_reports)) ?>;
     var markerColors = {dangerous:'#dc2626',caution:'#d97706',safe:'#16a34a'};
     var catLabels = {crime:'Crime',accident:'Accident',flooding:'Flooding',fire:'Fire',health:'Health',infrastructure:'Infrastructure',other:'Other'};
 
@@ -1064,17 +1090,6 @@ tr:hover td{background:#fafafa;}
 </div><!-- /main -->
 
 <script>
-function openSidebar(){
-  document.getElementById('sidebar').classList.add('open');
-  document.getElementById('overlay').classList.add('show');
-  document.body.style.overflow='hidden';
-}
-function closeSidebar(){
-  document.getElementById('sidebar').classList.remove('open');
-  document.getElementById('overlay').classList.remove('show');
-  document.body.style.overflow='';
-}
-</script>
 function openSidebar(){
   document.getElementById('sidebar').classList.add('open');
   document.getElementById('overlay').classList.add('show');

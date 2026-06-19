@@ -1,7 +1,7 @@
 <?php
 ini_set('display_errors', 0);
 error_reporting(E_ALL);
-session_start();
+session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
 header('Content-Type: application/json');
 
 // Global safety net: if anything dies unexpectedly, always return valid JSON
@@ -27,6 +27,7 @@ require __DIR__ . '/../config/db.php';
 $user_id = (int)($_SESSION['user_id'] ?? 0);
 $role    = $_SESSION['role'] ?? 'user';
 $action  = trim($_REQUEST['action'] ?? '');
+$has_assigned_to = sentri_table_has_column($conn, 'reports', 'assigned_to');
 
 // ── Ensure geo columns exist (compatible with all MySQL versions) ─────────
 // Uses INFORMATION_SCHEMA instead of "IF NOT EXISTS" which requires MySQL 8+
@@ -444,48 +445,88 @@ switch ($action) {
         echo json_encode(['status'=>'success','images'=>$images]);
         break;
 
+    case 'accept_assignment':
     case 'assign_report':
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status'=>'error','message'=>'POST required.']); exit; }
-        if (!in_array($role, ['first_responder','admin'], true)) { echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit; }
+        if (!in_array($role, ['first_responder', 'admin'], true)) { echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit; }
         $report_id = (int)($_POST['report_id'] ?? 0);
         if (!$report_id) { echo json_encode(['status'=>'error','message'=>'Invalid report ID.']); exit; }
-        $stmt = $conn->prepare("UPDATE reports SET assigned_to=? WHERE id=? AND assigned_to IS NULL");
-        $stmt->bind_param("ii", $user_id, $report_id);
+        if (!$has_assigned_to) {
+            echo json_encode(['status'=>'error','message'=>'Dispatch schema is missing. Run the database migration for reports.assigned_to.']);
+            exit;
+        }
+        $stmt = $conn->prepare("UPDATE reports SET accepted_at=COALESCE(accepted_at,NOW()) WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous'");
+        $stmt->bind_param("ii", $report_id, $user_id);
         $stmt->execute();
         if ($stmt->affected_rows > 0) {
-            echo json_encode(['status'=>'success','message'=>'Report assigned to you.']);
+            $r_res = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
+            $r_title = $conn->real_escape_string($r_res['title'] ?? 'Unknown');
+            $r_by    = (int)$_SESSION['user_id'];
+            $r_name  = $conn->real_escape_string(($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? ''));
+            $conn->query("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES ($report_id,'$r_title','accepted',$r_by,'$r_name')");
+            echo json_encode(['status'=>'success','message'=>'Assignment accepted.']);
         } else {
-            // Check if it was already assigned to this user vs someone else
-            $chk = $conn->prepare("SELECT assigned_to FROM reports WHERE id=?");
-            $chk->bind_param("i",$report_id); $chk->execute();
-            $chk->bind_result($cur_assigned); $chk->fetch(); $chk->close();
-            if((int)$cur_assigned === $user_id) {
-                echo json_encode(['status'=>'error','message'=>'You have already assigned this report to yourself.']);
+            $chk = $conn->prepare("SELECT assigned_to,status,is_archived FROM reports WHERE id=? LIMIT 1");
+            $chk->bind_param("i",$report_id); $chk->execute(); $chk->bind_result($cur_assigned,$cur_status,$cur_archived); $chk->fetch(); $chk->close();
+            if ((int)$cur_assigned !== $user_id) {
+                echo json_encode(['status'=>'error','message'=>'This report is not assigned to you by LGU.']);
+            } elseif ($cur_archived) {
+                echo json_encode(['status'=>'error','message'=>'Report is archived.']);
+            } elseif ($cur_status !== 'dangerous') {
+                echo json_encode(['status'=>'error','message'=>'Only dangerous reports can be accepted by responders.']);
             } else {
-                echo json_encode(['status'=>'error','message'=>'Report not found or already assigned to another responder.']);
+                echo json_encode(['status'=>'error','message'=>'Assignment could not be accepted.']);
             }
+        }
+        $stmt->close();
+        break;
+
+    case 'report_responded':
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status'=>'error','message'=>'POST required.']); exit; }
+        if (!in_array($role, ['first_responder', 'admin'], true)) { echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit; }
+        $report_id = (int)($_POST['report_id'] ?? 0);
+        if (!$report_id) { echo json_encode(['status'=>'error','message'=>'Invalid report ID.']); exit; }
+        $stmt = $conn->prepare("UPDATE reports SET responded_at=COALESCE(responded_at,NOW()) WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous'");
+        $stmt->bind_param("ii", $report_id, $user_id);
+        $stmt->execute();
+        if ($stmt->affected_rows > 0) {
+            $r_res = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
+            $r_title = $conn->real_escape_string($r_res['title'] ?? 'Unknown');
+            $r_by    = (int)$_SESSION['user_id'];
+            $r_name  = $conn->real_escape_string(($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? ''));
+            $conn->query("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES ($report_id,'$r_title','responded',$r_by,'$r_name')");
+            echo json_encode(['status'=>'success','message'=>'Reported as responded to LGU.']);
+        } else {
+            echo json_encode(['status'=>'error','message'=>'This report must be assigned to you before you can mark it responded.']);
         }
         $stmt->close();
         break;
 
     case 'resolve_report':
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status'=>'error','message'=>'POST required.']); exit; }
-        if (!in_array($role, ['first_responder','barangay','lgu','admin'], true)) { echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit; }
+        if (!in_array($role, ['first_responder', 'barangay', 'lgu', 'admin'], true)) { echo json_encode(['status'=>'error','message'=>'Unauthorized.']); exit; }
         $report_id = (int)($_POST['report_id'] ?? 0);
         if (!$report_id) { echo json_encode(['status'=>'error','message'=>'Invalid report ID.']); exit; }
-        $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW() WHERE id=? AND is_archived=0");
-        $stmt->bind_param("i", $report_id);
+        if ($role === 'first_responder') {
+            $stmt = $conn->prepare("UPDATE reports SET responded_at=COALESCE(responded_at,NOW()), resolved_at=NOW() WHERE id=? AND assigned_to=? AND is_archived=0 AND status='dangerous'");
+            $stmt->bind_param("ii", $report_id, $user_id);
+        } else {
+            $stmt = $conn->prepare("UPDATE reports SET status='safe', resolved_at=NOW() WHERE id=? AND is_archived=0");
+            $stmt->bind_param("i", $report_id);
+        }
         $stmt->execute();
+        if ($stmt->affected_rows >= 0) {
+            $r_res = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
+            $r_title = $conn->real_escape_string($r_res['title'] ?? 'Unknown');
+            $r_by    = (int)$_SESSION['user_id'];
+            $r_name  = $conn->real_escape_string(($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? ''));
+            $conn->query("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES ($report_id,'$r_title','resolved',$r_by,'$r_name')");
+            echo json_encode(['status'=>'success','message'=>'Report marked as resolved.']);
+        } else {
+            echo json_encode(['status'=>'error','message'=>'Report not found or not assigned to you.']);
+        }
         $stmt->close();
-        // Audit log
-        $r_res = $conn->query("SELECT title FROM reports WHERE id=$report_id")->fetch_assoc();
-        $r_title = $conn->real_escape_string($r_res['title'] ?? 'Unknown');
-        $r_by    = (int)$_SESSION['user_id'];
-        $r_name  = $conn->real_escape_string(($_SESSION['first_name'] ?? '') . ' ' . ($_SESSION['last_name'] ?? ''));
-        $conn->query("INSERT INTO report_audit_logs (report_id,report_title,action,performed_by,performed_by_name) VALUES ($report_id,'$r_title','resolved',$r_by,'$r_name')");
-        echo json_encode(['status'=>'success','message'=>'Report marked as resolved.']);
         break;
-
 
     case 'admin_get_audit_logs':
         if($role!=='admin'){echo json_encode(['status'=>'error','message'=>'Admin required.']);exit;}
@@ -539,7 +580,17 @@ switch ($action) {
         $chk_resp->bind_param("i", $responder_id); $chk_resp->execute(); $chk_resp->store_result();
         if ($chk_resp->num_rows === 0) { echo json_encode(['status'=>'error','message'=>'Responder not found or not approved.']); exit; }
         $chk_resp->close();
-        $dis = $conn->prepare("UPDATE reports SET assigned_to=? WHERE id=? AND is_archived=0");
+        if (!$has_assigned_to) {
+            echo json_encode(['status'=>'error','message'=>'Dispatch schema is missing. Run the database migration for reports.assigned_to.']);
+            break;
+        }
+        $chk_rep = $conn->prepare("SELECT status FROM reports WHERE id=? AND is_archived=0 LIMIT 1");
+        $chk_rep->bind_param("i", $report_id); $chk_rep->execute(); $chk_rep->bind_result($rep_status); $chk_rep->fetch(); $chk_rep->close();
+        if ($rep_status !== 'dangerous') {
+            echo json_encode(['status'=>'error','message'=>'LGU may only dispatch dangerous reports to responders.']);
+            break;
+        }
+        $dis = $conn->prepare("UPDATE reports SET assigned_to=?, accepted_at=NULL, responded_at=NULL, resolved_at=NULL WHERE id=? AND is_archived=0");
         $dis->bind_param("ii", $responder_id, $report_id);
         $dis->execute();
         echo json_encode(['status'=>'success','message'=>'Report dispatched to responder.']);
@@ -554,7 +605,7 @@ switch ($action) {
         $new_status = trim($_POST['status'] ?? '');
         $allowed_statuses = ['dangerous','caution','safe'];
         if (!$report_id || !in_array($new_status, $allowed_statuses)) { echo json_encode(['status'=>'error','message'=>'Invalid parameters.']); exit; }
-        $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : '';
+        $res_at = ($new_status === 'safe') ? ', resolved_at=NOW()' : ', accepted_at=NULL, responded_at=NULL';
         $s_upd = $conn->prepare("UPDATE reports SET status=? $res_at WHERE id=? AND is_archived=0");
         $s_upd->bind_param("si", $new_status, $report_id);
         $s_upd->execute();

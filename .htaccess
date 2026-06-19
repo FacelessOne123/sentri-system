@@ -1,0 +1,29 @@
+# ── SenTri Security Headers & Hardening ──────────────────────────────────────
+# NOTE: Security headers are also emitted by PHP (config/headers.php) so the
+# vulnerability scanner's headers_list() check works even if mod_headers is
+# unavailable. Apache headers here serve as an additional layer.
+
+<IfModule mod_headers.c>
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "geolocation=(self), camera=(), microphone=()"
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; font-src 'self' data: https://fonts.gstatic.com https://cdnjs.cloudflare.com; img-src 'self' data: https: blob:; connect-src 'self'; frame-ancestors 'self'; object-src 'none'; base-uri 'self'"
+    # HSTS: browsers ignore this over plain HTTP; enable once HTTPS is live.
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+</IfModule>
+
+# Block direct access to sensitive file types (source dumps, SQL, backups, env files)
+<FilesMatch "\.(sql|zip|tar|gz|bak|env|sh|log|ini)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Block access to .git and other VCS metadata if ever deployed
+RedirectMatch 404 /\.git

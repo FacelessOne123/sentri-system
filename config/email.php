@@ -22,10 +22,10 @@ define('MAIL_PORT',      587);                          // STARTTLS port
 define('MAIL_USERNAME',  'sican.isaac201419@gmail.com');       // ← CHANGE THIS
 
 // ── Gmail App Password (16 chars, no spaces) ──
-define('MAIL_PASSWORD',  'ylxtkntytawtqjti');           // ← CHANGE THIS
+define('MAIL_PASSWORD',  'gcfrvhzsempvngjq');           // ← CHANGE THIS
 
 // ── Sender name & address shown to recipients ──
-define('MAIL_FROM',      '1999aryastark1999@gmail.com');       // ← CHANGE THIS
+define('MAIL_FROM',      'sican.isaac201419@gmail.com');       // ← CHANGE THIS
 define('MAIL_FROM_NAME', 'SenTri');
 
 // ─── Application URL (no trailing slash) ─────────────────────────────────────

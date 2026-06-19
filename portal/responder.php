@@ -1,5 +1,5 @@
 <?php
-session_start();
+session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
 require_once __DIR__ . '/../config/auth.php';
 require_role(['first_responder']);
 require_once __DIR__ . '/../config/db.php';
@@ -7,6 +7,20 @@ require_once __DIR__ . '/../config/db.php';
 $uid   = (int)$_SESSION['user_id'];
 $fname = $_SESSION['first_name'];
 $view  = $_GET['view'] ?? 'queue';
+$has_assigned_to = sentri_table_has_column($conn, 'reports', 'assigned_to');
+$has_accepted_at = sentri_table_has_column($conn, 'reports', 'accepted_at');
+$has_responded_at = sentri_table_has_column($conn, 'reports', 'responded_at');
+$saved_gps_lat = $saved_gps_lng = null;
+if (sentri_table_has_column($conn, 'users', 'gps_lat') && sentri_table_has_column($conn, 'users', 'gps_lng')) {
+    $gpsRes = $conn->prepare("SELECT gps_lat,gps_lng FROM users WHERE id=? LIMIT 1");
+    if ($gpsRes) {
+        $gpsRes->bind_param("i", $uid);
+        $gpsRes->execute();
+        $gpsRes->bind_result($saved_gps_lat, $saved_gps_lng);
+        $gpsRes->fetch();
+        $gpsRes->close();
+    }
+}
 
 $stmt = $conn->prepare("SELECT org_name,`position`,responder_type,barangay_name,municipality FROM users WHERE id=? LIMIT 1");
 $stmt->bind_param("i",$uid); $stmt->execute();
@@ -21,6 +35,10 @@ $unit_color  = $type_colors[strtolower($prof['responder_type']??'')] ?? '#dc2626
 
 $cat_icons = ['crime'=>'fa-user-slash','accident'=>'fa-car-burst','flooding'=>'fa-water','fire'=>'fa-fire','health'=>'fa-heart-pulse','infrastructure'=>'fa-road-barrier','other'=>'fa-circle-exclamation'];
 $type_icons = ['lgu'=>'fa-landmark','hospital'=>'fa-hospital','traffic'=>'fa-traffic-light','barangay'=>'fa-house-flag','police'=>'fa-shield','fire'=>'fa-fire-extinguisher','other'=>'fa-phone'];
+
+$assigned_col = $has_assigned_to ? "r.assigned_to," : "NULL AS assigned_to,";
+$accepted_col = $has_accepted_at ? "r.accepted_at," : "NULL AS accepted_at,";
+$responded_col = $has_responded_at ? "r.responded_at," : "NULL AS responded_at,";
 
 function cq($conn,$sql,$t='',$p=[]){
     $s=$conn->prepare($sql);
@@ -37,37 +55,54 @@ $danger_count  = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='dangerous'
 $caution_count = cq($conn,"SELECT COUNT(*) FROM reports WHERE status='caution' AND is_archived=0");
 
 // Per-view data
-$queue = $assigned = $contacts = $resolved = [];
+$queue = $assigned = $contacts = $resolved = $community_reports = [];
 
 if ($view === 'queue' || $view === 'overview') {
-    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.assigned_to,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.status IN('dangerous','caution') ORDER BY FIELD(r.status,'dangerous','caution'),r.created_at DESC LIMIT 60");
+    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.resolved_at,{$assigned_col}{$accepted_col}{$responded_col}u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND r.status IN('dangerous','caution') ORDER BY FIELD(r.status,'dangerous','caution'),r.created_at DESC LIMIT 60");
+    if (!$s) { die("DB Error (queue): " . $conn->error); }
     $s->execute(); $res=$s->get_result();
     while($row=$res->fetch_assoc()) $queue[]=$row;
     $s->close();
 }
 
 if ($view === 'assigned') {
-    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.assigned_to=? AND r.is_archived=0 ORDER BY r.created_at DESC");
-    $s->bind_param("i",$uid); $s->execute(); $res=$s->get_result();
-    while($row=$res->fetch_assoc()) $assigned[]=$row;
-    $s->close();
+    if ($has_assigned_to) {
+        $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.latitude,r.longitude,r.created_at,r.description,r.resolved_at,{$accepted_col}{$responded_col}u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.assigned_to=? AND r.is_archived=0 ORDER BY r.created_at DESC");
+        if (!$s) { die("DB Error (assigned): " . $conn->error); }
+        $s->bind_param("i",$uid); $s->execute(); $res=$s->get_result();
+        while($row=$res->fetch_assoc()) $assigned[]=$row;
+        $s->close();
+    }
 }
 
 if ($view === 'resolved') {
-    $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.resolved_at,u.first_name,u.last_name FROM reports r JOIN users u ON u.id=r.user_id WHERE r.assigned_to=? AND r.status='safe' ORDER BY r.resolved_at DESC LIMIT 50");
-    $s->bind_param("i",$uid); $s->execute(); $res=$s->get_result();
-    while($row=$res->fetch_assoc()) $resolved[]=$row;
+    if ($has_assigned_to) {
+        $s = $conn->prepare("SELECT r.id,r.title,r.category,r.status,r.barangay,r.city,r.created_at,r.resolved_at,{$responded_col}u.first_name,u.last_name FROM reports r JOIN users u ON r.user_id=u.id WHERE r.assigned_to=? AND r.resolved_at IS NOT NULL ORDER BY r.resolved_at DESC LIMIT 50");
+        if (!$s) { die("DB Error (resolved): " . $conn->error); }
+        $s->bind_param("i",$uid); $s->execute(); $res=$s->get_result();
+        while($row=$res->fetch_assoc()) $resolved[]=$row;
+        $s->close();
+    }
+}
+
+if ($view === 'community') {
+    $s = $conn->prepare("SELECT r.id,r.user_id,r.title,r.description,r.location_name,r.barangay,r.city,r.province,r.latitude,r.longitude,r.radius_m,r.status,r.category,r.upvotes,r.downvotes,r.created_at,r.resolved_at,u.first_name,u.last_name,u.role FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND u.role IN('community','user') ORDER BY FIELD(r.status,'dangerous','caution','safe'), r.created_at DESC LIMIT 120");
+    if (!$s) { die("DB Error (community): " . $conn->error); }
+    $s->execute(); $res=$s->get_result();
+    while($row=$res->fetch_assoc()) $community_reports[]=$row;
     $s->close();
 }
 
 if ($view === 'contacts') {
     $s = $conn->prepare("SELECT * FROM emergency_contacts WHERE is_active=1 ORDER BY type,name");
+    if (!$s) { die("DB Error (contacts): " . $conn->error); }
     $s->execute(); $res=$s->get_result();
     while($r=$res->fetch_assoc()) $contacts[]=$r;
     $s->close();
 }
 
-$my_count = cq($conn,"SELECT COUNT(*) FROM reports WHERE assigned_to=? AND is_archived=0 AND status IN('dangerous','caution')",'i',[$uid]);
+$my_count = $has_assigned_to ? cq($conn,"SELECT COUNT(*) FROM reports WHERE assigned_to=? AND is_archived=0 AND status IN('dangerous','caution')",'i',[$uid]) : 0;
+$community_count = cq($conn,"SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.user_id WHERE r.is_archived=0 AND u.role IN('community','user')");
 
 // ── MAP DATA ────────────────────────────────────────────────────────────────
 $map_reports = [];
@@ -121,20 +156,22 @@ if ($view === 'profile') {
 }
 
 $nav_items = [
-    'queue'    => ['icon'=>'fa-siren-on',         'label'=>'Dispatch Queue'],
-    'assigned' => ['icon'=>'fa-clipboard-check',  'label'=>'My Assignments'],
-    'map'      => ['icon'=>'fa-map-location-dot', 'label'=>'Incident Map'],
-    'resolved' => ['icon'=>'fa-circle-check',     'label'=>'Resolved by Me'],
-    'contacts' => ['icon'=>'fa-address-book',     'label'=>'Emergency Contacts'],
-    'profile'  => ['icon'=>'fa-id-card',          'label'=>'My Profile'],
+    'queue'     => ['icon'=>'fa-siren-on',         'label'=>'Dispatch Queue'],
+    'community' => ['icon'=>'fa-users',            'label'=>'Community Reports'],
+    'assigned'  => ['icon'=>'fa-clipboard-check',  'label'=>'My Assignments'],
+    'map'       => ['icon'=>'fa-map-location-dot', 'label'=>'Incident Map'],
+    'resolved'  => ['icon'=>'fa-circle-check',     'label'=>'Resolved by Me'],
+    'contacts'  => ['icon'=>'fa-address-book',     'label'=>'Emergency Contacts'],
+    'profile'   => ['icon'=>'fa-id-card',          'label'=>'My Profile'],
 ];
 $page_titles = [
-    'queue'    => 'Dispatch Queue',
-    'assigned' => 'My Assignments',
-    'map'      => 'Incident Map',
-    'resolved' => 'Resolved by Me',
-    'contacts' => 'Emergency Contacts',
-    'profile'  => 'My Profile',
+    'queue'     => 'Dispatch Queue',
+    'community' => 'Community Reports',
+    'assigned'  => 'My Assignments',
+    'map'       => 'Incident Map',
+    'resolved'  => 'Resolved by Me',
+    'contacts'  => 'Emergency Contacts',
+    'profile'   => 'My Profile',
 ];
 ?>
 <!DOCTYPE html>
@@ -250,12 +287,29 @@ tr:hover td{background:#fafafa;}
 .coming-soon h3{font-size:1rem;font-weight:700;color:var(--text);margin-bottom:6px;}
 .coming-soon p{font-size:0.85rem;color:var(--muted);}
 /* OVERLAY */
-.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:150;}
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:1100;}
 .overlay.show{display:block;}
 /* RESPONSIVE */
-@media(max-width:860px){.sidebar{transform:translateX(-100%);}.sidebar.open{transform:translateX(0);}.sb-close{display:flex;}.main{margin-left:0;}.ham-btn{display:flex;}.stat-row{grid-template-columns:1fr 1fr;}.content{padding:16px;}.topbar{padding:0 16px;}}
+@media(max-width:860px){.sidebar{width:100dvw;max-width:100dvw;transform:translate3d(-100%,0,0);z-index:1200;left:0;right:0;}.sidebar.open{transform:translate3d(0,0,0);}.sb-close{display:flex;}.main{margin-left:0;}.ham-btn{display:flex;}.stat-row{grid-template-columns:1fr 1fr;}.content{padding:16px;}.topbar{padding:0 16px;}}
+@media(max-width:860px){body.sidebar-open .main{display:none;}body.sidebar-open .overlay{z-index:1190;}}
 @media(max-width:480px){.stat-row{grid-template-columns:1fr;}.badge-resp,.page-sub{display:none;}}
+
+/* In-app navigation modal */
+.nav-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2000;align-items:center;justify-content:center;}
+.nav-modal-overlay.show{display:flex;}
+.nav-modal{background:#fff;border-radius:14px;width:min(720px,94vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.3);}
+.nav-modal-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);}
+.nav-modal-head h3{font-size:0.94rem;font-weight:800;}
+.nav-modal-close{background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted);}
+#navModalMap{height:400px;width:100%;background:#f5e8e8;overflow:hidden;position:relative;}
+#navMapInner{position:absolute;top:50%;left:50%;width:145%;height:145%;transform-origin:50% 50%;transform:translate(-50%,-50%) rotate(0deg);transition:transform 0.2s linear;}
+.nav-arrow-icon{width:0;height:0;border-left:9px solid transparent;border-right:9px solid transparent;border-bottom:22px solid #2563eb;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4));transition:transform 0.2s linear;}
+.nav-modal-info .nav-arrived{color:#16a34a;font-weight:800;}
+.nav-modal-info{padding:10px 16px;font-size:0.8rem;color:var(--muted);border-top:1px solid var(--border);display:flex;gap:16px;flex-wrap:wrap;}
+.nav-modal-info b{color:#222;}
 </style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 </head>
 <body>
 <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
@@ -280,6 +334,7 @@ tr:hover td{background:#fafafa;}
       <a href="responder.php?view=<?= $key ?>" class="<?= $view===$key?'active':'' ?>">
         <i class="fas <?= $item['icon'] ?>"></i> <?= $item['label'] ?>
         <?php if($key==='assigned' && $my_count > 0): ?><span class="sb-badge"><?= $my_count ?></span><?php endif; ?>
+        <?php if($key==='community' && $community_count > 0): ?><span class="sb-badge"><?= $community_count ?></span><?php endif; ?>
       </a>
     <?php endforeach; ?>
   </nav>
@@ -316,6 +371,23 @@ tr:hover td{background:#fafafa;}
   <div class="content">
 
   <?php if($view === 'queue'): ?>
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-header">
+        <h3><i class="fas fa-location-crosshairs" style="color:var(--red-light);margin-right:6px;"></i>My GPS Location</h3>
+        <span class="card-meta" id="gpsStatus"><?= $saved_gps_lat !== null && $saved_gps_lng !== null ? 'Saved on profile' : 'Not saved yet' ?></span>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+        <div style="min-width:0;">
+          <div id="gpsCoords" style="font-size:0.85rem;font-weight:700;color:var(--text);">
+            <?= $saved_gps_lat !== null && $saved_gps_lng !== null ? htmlspecialchars(number_format((float)$saved_gps_lat, 6).', '.number_format((float)$saved_gps_lng, 6)) : 'Tap the button to get and save your current location.' ?>
+          </div>
+          <div style="font-size:0.76rem;color:var(--muted);margin-top:4px;">Used for navigation to assigned dangerous reports.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" class="btn-dispatch" onclick="captureMyGps(this)"><i class="fas fa-crosshairs"></i> Get My GPS</button>
+        </div>
+      </div>
+    </div>
     <div class="stat-row">
       <div class="stat-card"><div class="stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="stat-num"><?= $danger_count ?></div><div class="stat-lbl">Dangerous</div></div></div>
       <div class="stat-card"><div class="stat-icon" style="background:#fffbeb;color:#d97706;"><i class="fas fa-circle-exclamation"></i></div><div><div class="stat-num"><?= $caution_count ?></div><div class="stat-lbl">Caution</div></div></div>
@@ -340,22 +412,80 @@ tr:hover td{background:#fafafa;}
             <div class="inc-title"><?= htmlspecialchars($r['title']) ?></div>
             <div class="inc-meta">
               <span class="pill pill-<?= $r['status'] ?>"><?= ucfirst($r['status']) ?></span>
+              <?php if(!empty($r['resolved_at'])): ?><span class="pill" style="background:#f0fdf4;color:#166534;">Resolved</span><?php else: ?><span class="pill" style="background:#fef2f2;color:#991b1b;">Unresolved</span><?php endif; ?>
               <span><i class="fas fa-location-dot"></i> <?= htmlspecialchars($r['barangay'] ?? $r['city'] ?? '') ?></span>
               <span><?= date('M j, g:ia', strtotime($r['created_at'])) ?></span>
               <?php if($r['latitude']): ?>
-              <a class="map-link" href="https://maps.google.com/?q=<?= $r['latitude'] ?>,<?= $r['longitude'] ?>" target="_blank"><i class="fas fa-map-pin"></i> View Map</a>
+              <a class="map-link" href="javascript:void(0)" onclick="viewOnMap(<?= (float)$r['latitude'] ?>, <?= (float)$r['longitude'] ?>, '<?= htmlspecialchars(addslashes($r['title']), ENT_QUOTES) ?>')"><i class="fas fa-map-pin"></i> View Map</a>
               <?php endif; ?>
             </div>
             <?php if($r['description']): ?><div style="font-size:0.76rem;color:var(--muted);margin-top:2px;"><?= htmlspecialchars(mb_strimwidth($r['description'],0,100,'…')) ?></div><?php endif; ?>
           </div>
           <div class="inc-actions">
             <?php if($is_mine): ?>
-              <span class="btn-assigned"><i class="fas fa-check"></i> Assigned to Me</span>
-              <button class="btn-resolve-sm" onclick="resolve(<?= $r['id'] ?>,this)"><i class="fas fa-circle-check"></i> Resolve</button>
+              <span class="btn-assigned"><i class="fas fa-check"></i> LGU Assigned</span>
+              <?php if(empty($r['accepted_at'])): ?>
+                <button class="btn-dispatch" onclick="acceptAssignment(<?= $r['id'] ?>,this)"><i class="fas fa-hand-pointer"></i> Accept Assignment</button>
+              <?php endif; ?>
+              <?php if(!empty($r['latitude']) && !empty($r['longitude'])): ?>
+                <button class="btn-dispatch" onclick="openNavigation(<?= (float)$r['latitude'] ?>, <?= (float)$r['longitude'] ?>, <?= $r['id'] ?>)"><i class="fas fa-route"></i> Navigate</button>
+              <?php endif; ?>
+              <?php if(empty($r['responded_at'])): ?>
+                <button class="btn-resolve-sm" onclick="markResponded(<?= $r['id'] ?>,this)"><i class="fas fa-bell"></i> Responded to LGU</button>
+              <?php endif; ?>
             <?php elseif($is_assigned): ?>
-              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">Assigned</span>
+              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">Assigned by LGU</span>
             <?php else: ?>
-              <button class="btn-dispatch" onclick="assign(<?= $r['id'] ?>,this)"><i class="fas fa-hand-pointer"></i> Assign to Me</button>
+              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">Awaiting LGU dispatch</span>
+            <?php endif; ?>
+          </div>
+        </div>
+      <?php endforeach; endif; ?>
+    </div>
+
+  <?php elseif($view === 'community'): ?>
+    <div class="stat-row">
+      <div class="stat-card"><div class="stat-icon" style="background:#f0f7ff;color:#0a3d62;"><i class="fas fa-users"></i></div><div><div class="stat-num"><?= $community_count ?></div><div class="stat-lbl">Community Posts</div></div></div>
+      <div class="stat-card"><div class="stat-icon" style="background:#fef2f2;color:#dc2626;"><i class="fas fa-triangle-exclamation"></i></div><div><div class="stat-num"><?= $danger_count ?></div><div class="stat-lbl">Dangerous</div></div></div>
+      <div class="stat-card"><div class="stat-icon" style="background:#fffbeb;color:#d97706;"><i class="fas fa-circle-exclamation"></i></div><div><div class="stat-num"><?= $caution_count ?></div><div class="stat-lbl">Caution</div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="fas fa-users" style="color:#0a3d62;margin-right:6px;"></i>Community Reports</h3>
+        <span class="card-meta"><?= count($community_reports) ?> reports</span>
+      </div>
+      <?php if(empty($community_reports)): ?>
+        <div class="empty"><i class="fas fa-people-group" style="color:#0a3d62;opacity:0.35;"></i><p>No community reports yet.</p></div>
+      <?php else: foreach($community_reports as $r):
+        $is_mine = $has_assigned_to ? ((int)($r['assigned_to'] ?? 0) === $uid) : false;
+        $is_assigned = $has_assigned_to && !empty($r['assigned_to']);
+        $ibg = $r['status']==='dangerous' ? '#fef2f2' : ($r['status']==='caution' ? '#fffbeb' : '#f0fdf4');
+        $iclr = $r['status']==='dangerous' ? '#dc2626' : ($r['status']==='caution' ? '#d97706' : '#16a34a');
+        $reporter = trim(($r['first_name'] ?? '').' '.($r['last_name'] ?? ''));
+      ?>
+        <div class="incident-row">
+          <div class="inc-icon" style="background:<?= $ibg ?>;color:<?= $iclr ?>;"><i class="fas <?= $cat_icons[$r['category']] ?? 'fa-circle-exclamation' ?>"></i></div>
+          <div class="inc-body">
+            <div class="inc-title"><?= htmlspecialchars($r['title']) ?></div>
+            <div class="inc-meta">
+              <span class="pill pill-<?= $r['status'] ?>"><?= ucfirst($r['status']) ?></span>
+              <?php if(!empty($r['resolved_at'])): ?><span class="pill" style="background:#f0fdf4;color:#166534;">Resolved</span><?php else: ?><span class="pill" style="background:#fef2f2;color:#991b1b;">Unresolved</span><?php endif; ?>
+              <span><i class="fas fa-user"></i> <?= htmlspecialchars($reporter ?: 'Community User') ?></span>
+              <span><i class="fas fa-location-dot"></i> <?= htmlspecialchars($r['barangay'] ?? $r['city'] ?? '') ?></span>
+              <span><?= date('M j, g:ia', strtotime($r['created_at'])) ?></span>
+              <?php if(!empty($r['latitude']) && !empty($r['longitude'])): ?>
+              <a class="map-link" href="javascript:void(0)" onclick="viewOnMap(<?= (float)$r['latitude'] ?>, <?= (float)$r['longitude'] ?>, '<?= htmlspecialchars(addslashes($r['title']), ENT_QUOTES) ?>')"><i class="fas fa-map-pin"></i> View Map</a>
+              <?php endif; ?>
+            </div>
+            <?php if(!empty($r['description'])): ?><div style="font-size:0.76rem;color:var(--muted);margin-top:2px;"><?= htmlspecialchars(mb_strimwidth($r['description'],0,120,'…')) ?></div><?php endif; ?>
+          </div>
+          <div class="inc-actions">
+            <?php if($is_mine): ?>
+              <span class="btn-assigned"><i class="fas fa-check"></i> LGU Assigned</span>
+            <?php elseif($is_assigned): ?>
+              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">Assigned by LGU</span>
+            <?php else: ?>
+              <span style="font-size:0.72rem;color:var(--muted);font-weight:600;">LGU dispatch only</span>
             <?php endif; ?>
           </div>
         </div>
@@ -377,14 +507,24 @@ tr:hover td{background:#fafafa;}
             <div class="inc-title"><?= htmlspecialchars($r['title']) ?></div>
             <div class="inc-meta">
               <span class="pill pill-<?= $r['status'] ?>"><?= ucfirst($r['status']) ?></span>
+              <?php if(!empty($r['resolved_at'])): ?><span class="pill" style="background:#f0fdf4;color:#166534;">Resolved</span><?php else: ?><span class="pill" style="background:#fef2f2;color:#991b1b;">Unresolved</span><?php endif; ?>
               <span><i class="fas fa-location-dot"></i> <?= htmlspecialchars($r['barangay'] ?? $r['city'] ?? '') ?></span>
               <span><?= date('M j, g:ia', strtotime($r['created_at'])) ?></span>
               <?php if($r['latitude']): ?>
-              <a class="map-link" href="https://maps.google.com/?q=<?= $r['latitude'] ?>,<?= $r['longitude'] ?>" target="_blank"><i class="fas fa-map-pin"></i> View Map</a>
+              <a class="map-link" href="javascript:void(0)" onclick="viewOnMap(<?= (float)$r['latitude'] ?>, <?= (float)$r['longitude'] ?>, '<?= htmlspecialchars(addslashes($r['title']), ENT_QUOTES) ?>')"><i class="fas fa-map-pin"></i> View Map</a>
               <?php endif; ?>
             </div>
           </div>
           <div class="inc-actions">
+            <?php if(empty($r['accepted_at'])): ?>
+              <button class="btn-dispatch" onclick="acceptAssignment(<?= $r['id'] ?>,this)"><i class="fas fa-hand-pointer"></i> Accept Assignment</button>
+            <?php endif; ?>
+            <?php if(!empty($r['latitude']) && !empty($r['longitude'])): ?>
+              <button class="btn-dispatch" onclick="openNavigation(<?= (float)$r['latitude'] ?>, <?= (float)$r['longitude'] ?>, <?= $r['id'] ?>)"><i class="fas fa-route"></i> Navigate</button>
+            <?php endif; ?>
+            <?php if(empty($r['responded_at'])): ?>
+              <button class="btn-resolve-sm" onclick="markResponded(<?= $r['id'] ?>,this)"><i class="fas fa-bell"></i> Responded to LGU</button>
+            <?php endif; ?>
             <button class="btn-resolve-sm" onclick="resolve(<?= $r['id'] ?>,this)"><i class="fas fa-circle-check"></i> Resolve</button>
           </div>
         </div>
@@ -499,8 +639,6 @@ tr:hover td{background:#fafafa;}
     </div>
 
   <?php elseif($view === 'map'): ?>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
     <style>
     .resp-map-wrap{position:relative;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,0.1);border:1px solid var(--border);}
     #respMap{height:510px;width:100%;background:#f5e8e8;}
@@ -562,7 +700,6 @@ tr:hover td{background:#fafafa;}
       var c=rmc[r.status]||'#888';
       var m=L.marker([r.lat,r.lng],{icon:makeRespIcon(c)});
       m.rd=r;
-      var mapsLink='https://maps.google.com/?q='+r.lat+','+r.lng;
       m.bindPopup(
         '<div style="min-width:200px;font-family:Inter,sans-serif;">'+
         '<div style="font-weight:800;font-size:0.9rem;margin-bottom:6px;">'+r.title+'</div>'+
@@ -571,7 +708,7 @@ tr:hover td{background:#fafafa;}
         '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:3px;"><b>Category:</b> '+(catL[r.category]||r.category)+'</div>'+
         '<div style="font-size:0.78rem;color:#6b7280;margin-bottom:6px;"><b>Reported:</b> '+r.date+'</div>'+
         (r.desc?'<div style="font-size:0.78rem;color:#374151;margin-bottom:8px;">'+r.desc.substring(0,100)+(r.desc.length>100?'…':'')+'</div>':'')+
-        '<a href="'+mapsLink+'" target="_blank" style="font-size:0.8rem;color:#2563eb;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:4px;"><i class="fas fa-directions"></i> Get Directions</a>'+
+        '<a href="javascript:void(0)" onclick="closeNavModal();openNavigation('+r.lat+','+r.lng+',\''+r.id+'\')" style="font-size:0.8rem;color:#2563eb;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:4px;"><i class="fas fa-directions"></i> Get Directions</a>'+
         '</div>',{maxWidth:240}
       );
       m.addTo(rmap); rMarkers.push(m);
@@ -598,36 +735,242 @@ tr:hover td{background:#fafafa;}
 </div>
 
 <script>
-function openSidebar(){document.getElementById('sidebar').classList.add('open');document.getElementById('overlay').classList.add('show');document.body.style.overflow='hidden';}
-function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show');document.body.style.overflow='';}
+function openSidebar(){document.getElementById('sidebar').classList.add('open');document.getElementById('overlay').classList.add('show');document.body.classList.add('sidebar-open');document.body.style.overflow='hidden';}
+function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show');document.body.classList.remove('sidebar-open');document.body.style.overflow='';}
 
-async function assign(id,btn){
+var responderGps = { lat: <?= $saved_gps_lat !== null ? json_encode((float)$saved_gps_lat) : 'null' ?>, lng: <?= $saved_gps_lng !== null ? json_encode((float)$saved_gps_lng) : 'null' ?> };
+
+function setGpsText(lat, lng, saved){
+  var coords = document.getElementById('gpsCoords');
+  var status = document.getElementById('gpsStatus');
+  if(coords){ coords.textContent = Number(lat).toFixed(6) + ', ' + Number(lng).toFixed(6); }
+  if(status){ status.textContent = saved ? 'Saved on profile' : 'Current location'; }
+}
+
+async function captureMyGps(btn){
+  if(!navigator.geolocation){ alert('Geolocation is not supported on this device.'); return; }
+  var prev = btn.innerHTML; btn.disabled = true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Locating';
+  navigator.geolocation.getCurrentPosition(async function(pos){
+    var lat = pos.coords.latitude;
+    var lng = pos.coords.longitude;
+    responderGps.lat = lat; responderGps.lng = lng;
+    setGpsText(lat, lng, false);
+    try{
+      var fd = new FormData(); fd.append('action','save_gps'); fd.append('latitude', lat); fd.append('longitude', lng);
+      var res = await fetch('../api/reports.php', {method:'POST', body:fd});
+      var data = await res.json();
+      if(data.status==='success'){
+        responderGps.lat = data.lat; responderGps.lng = data.lng;
+        setGpsText(data.lat, data.lng, true);
+        alert('GPS location saved.');
+      } else {
+        alert(data.message || 'Could not save GPS location.');
+      }
+    } catch(e){
+      alert('Could not save GPS location.');
+    }
+    btn.disabled = false; btn.innerHTML = prev;
+  }, function(){
+    btn.disabled = false; btn.innerHTML = prev;
+    alert('Location access was denied.');
+  }, {enableHighAccuracy:true, timeout:12000, maximumAge:0});
+}
+
+var navMap=null, navLayer=null, navWatchId=null, navHeading=0, navOrigMarker=null, navArrived=false, navDest=null, navReportId=null;
+var ARRIVAL_RADIUS_M = 40;
+function ensureNavMap(){
+  if(!navMap){
+    navMap = L.map('navMapInner',{zoomControl:false,attributionControl:true});
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'\u00a9 OpenStreetMap'}).addTo(navMap);
+  }
+  if(navLayer){ navMap.removeLayer(navLayer); navLayer=null; }
+  document.getElementById('navMapInner').style.transform='translate(-50%,-50%) rotate(0deg)';
+}
+function haversine(lat1,lon1,lat2,lon2){
+  var R=6371000, toRad=function(d){return d*Math.PI/180;};
+  var dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
+  var a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)*Math.sin(dLon/2);
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+function stopNavTracking(){
+  if(navWatchId!==null){ navigator.geolocation.clearWatch(navWatchId); navWatchId=null; }
+  window.removeEventListener('deviceorientationabsolute',onNavOrientation);
+  window.removeEventListener('deviceorientation',onNavOrientation);
+  if(navOrigMarker && navMap){ navMap.removeLayer(navOrigMarker); }
+  navDest=null; navReportId=null; navArrived=false; navOrigMarker=null;
+}
+function closeNavModal(){
+  document.getElementById('navModalOverlay').classList.remove('show');
+  stopNavTracking();
+}
+function onNavOrientation(e){
+  var heading = (typeof e.webkitCompassHeading !== 'undefined') ? e.webkitCompassHeading : (e.alpha!==null ? (360-e.alpha) : null);
+  if(heading===null) return;
+  navHeading = heading;
+  applyNavRotation();
+}
+function applyNavRotation(){
+  document.getElementById('navMapInner').style.transform='translate(-50%,-50%) rotate('+(-navHeading)+'deg)';
+  if(navOrigMarker){
+    var el=navOrigMarker.getElement();
+    if(el){ var arrow=el.querySelector('.nav-arrow-icon'); if(arrow) arrow.style.transform='rotate('+navHeading+'deg)'; }
+  }
+}
+function viewOnMap(lat, lng, title){
+  if(lat===null||lng===null||typeof lat==='undefined'||typeof lng==='undefined'||lat===''||lng===''){
+    alert('This report has no GPS coordinates.'); return;
+  }
+  document.getElementById('navModalTitle').textContent = title || 'Incident Location';
+  document.getElementById('navModalInfo').innerHTML = '';
+  document.getElementById('navModalOverlay').classList.add('show');
+  setTimeout(function(){
+    ensureNavMap();
+    navMap.setView([lat,lng],16);
+    navLayer = L.marker([lat,lng]).addTo(navMap);
+    navMap.invalidateSize();
+  },50);
+}
+async function markArrivedSilently(reportId){
+  try{
+    var fd=new FormData(); fd.append('action','resolve_report'); fd.append('report_id',reportId);
+    await fetch('../api/reports.php',{method:'POST',body:fd});
+  }catch(e){}
+}
+function drawNavRoute(group){
+  var url = 'https://router.project-osrm.org/route/v1/driving/'+responderGps.lng+','+responderGps.lat+';'+navDest.lng+','+navDest.lat+'?overview=full&geometries=geojson';
+  fetch(url).then(function(r){return r.json();}).then(function(data){
+    if(navLayer) navMap.removeLayer(navLayer);
+    if(data.routes && data.routes[0]){
+      var route = data.routes[0];
+      var coords = route.geometry.coordinates.map(function(c){return [c[1],c[0]];});
+      var line = L.polyline(coords,{color:'#2563eb',weight:5,opacity:0.8}).addTo(navMap);
+      navLayer = L.featureGroup(group.concat([line]));
+      var km = (route.distance/1000).toFixed(1);
+      var mins = Math.round(route.duration/60);
+      document.getElementById('navModalInfo').innerHTML = '<span><b>Distance:</b> '+km+' km</span><span><b>ETA:</b> '+mins+' min</span>';
+    } else {
+      navLayer = L.featureGroup(group);
+      document.getElementById('navModalInfo').innerHTML = '<span>Route unavailable.</span>';
+    }
+  }).catch(function(){
+    navLayer = L.featureGroup(group);
+    document.getElementById('navModalInfo').innerHTML = '<span>Route unavailable.</span>';
+  });
+}
+function onNavPosition(pos){
+  var lat=pos.coords.latitude, lng=pos.coords.longitude;
+  responderGps.lat=lat; responderGps.lng=lng;
+  if(pos.coords.heading!==null && !isNaN(pos.coords.heading)){
+    navHeading = pos.coords.heading;
+    applyNavRotation();
+  }
+  var arrowIcon = L.divIcon({className:'',html:'<div class="nav-arrow-icon" style="transform:rotate('+navHeading+'deg);"></div>',iconSize:[18,22],iconAnchor:[9,16]});
+  if(!navOrigMarker){
+    navOrigMarker = L.marker([lat,lng],{icon:arrowIcon}).addTo(navMap).bindPopup('Your Location');
+  } else {
+    navOrigMarker.setLatLng([lat,lng]);
+    navOrigMarker.setIcon(arrowIcon);
+  }
+  navMap.setView([lat,lng], navMap.getZoom() < 15 ? 16 : navMap.getZoom());
+  if(navDest){
+    var destMarker = navOrigMarker._destRef;
+    var group=[navOrigMarker]; if(destMarker) group.push(destMarker);
+    drawNavRoute(group);
+    var dist = haversine(lat,lng,navDest.lat,navDest.lng);
+    if(dist <= ARRIVAL_RADIUS_M && !navArrived){
+      navArrived = true;
+      document.getElementById('navModalInfo').innerHTML = '<span class="nav-arrived"><i class="fas fa-flag-checkered"></i> You have arrived! Marking as responded\u2026</span>';
+      var rid = navReportId;
+      stopNavTracking();
+      markArrivedSilently(rid).then(function(){
+        setTimeout(function(){ closeNavModal(); location.reload(); }, 1200);
+      });
+    }
+  }
+}
+function openNavigation(lat, lng, reportId){
+  if(lat === null || lng === null || typeof lat === 'undefined' || typeof lng === 'undefined' || lat === '' || lng === ''){
+    alert('This report has no GPS coordinates.');
+    return;
+  }
+  document.getElementById('navModalTitle').textContent = 'Navigate to Incident';
+  document.getElementById('navModalInfo').innerHTML = '<span>Loading route\u2026</span>';
+  document.getElementById('navModalOverlay').classList.add('show');
+  navDest = {lat:lat,lng:lng}; navReportId = reportId; navArrived=false;
+  setTimeout(function(){
+    ensureNavMap();
+    navMap.setView([lat,lng],15);
+    var destIcon = L.divIcon({className:'',html:'<div style="width:16px;height:16px;border-radius:50%;background:#dc2626;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4);"></div>',iconSize:[16,16],iconAnchor:[8,8]});
+    var destMarker = L.marker([lat,lng],{icon:destIcon}).addTo(navMap).bindPopup('Incident Location');
+    var group = [destMarker];
+    navLayer = L.featureGroup(group);
+    navMap.fitBounds(navLayer.getBounds().pad(0.25));
+    navMap.invalidateSize();
+
+    if(!navigator.geolocation){
+      document.getElementById('navModalInfo').innerHTML = '<span>Geolocation not supported on this device.</span>';
+      return;
+    }
+    if(window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function'){
+      DeviceOrientationEvent.requestPermission().then(function(state){
+        if(state==='granted') window.addEventListener('deviceorientation', onNavOrientation, true);
+      }).catch(function(){});
+    } else {
+      window.addEventListener('deviceorientationabsolute', onNavOrientation, true);
+      window.addEventListener('deviceorientation', onNavOrientation, true);
+    }
+    navWatchId = navigator.geolocation.watchPosition(function(pos){
+      onNavPosition(pos);
+      if(navOrigMarker) navOrigMarker._destRef = destMarker;
+    }, function(){
+      document.getElementById('navModalInfo').innerHTML = '<span>Location access denied \u2014 showing static route.</span>';
+      if(responderGps.lat!==null && responderGps.lng!==null){
+        var origIcon = L.divIcon({className:'',html:'<div style="width:16px;height:16px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4);"></div>',iconSize:[16,16],iconAnchor:[8,8]});
+        var origMarker = L.marker([responderGps.lat,responderGps.lng],{icon:origIcon}).addTo(navMap).bindPopup('Your Location');
+        drawNavRoute([destMarker, origMarker]);
+      }
+    }, {enableHighAccuracy:true, timeout:15000, maximumAge:5000});
+  },50);
+}
+
+async function acceptAssignment(id,btn){
   btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i>';
   try{
-    var fd=new FormData(); fd.append('action','assign_report'); fd.append('report_id',id);
+    var fd=new FormData(); fd.append('action','accept_assignment'); fd.append('report_id',id);
     var res=await fetch('../api/reports.php',{method:'POST',body:fd});
     var data=await res.json();
     if(data.status==='success') location.reload();
-    else{ alert(data.message||'Error.'); btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Assign to Me'; }
-  }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Assign to Me'; }
+    else{ alert(data.message||'Error.'); btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Accept Assignment'; }
+  }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-hand-pointer"></i> Accept Assignment'; }
 }
 
-async function resolve(id,btn){
-  if(!confirm('Mark this incident as resolved?')) return;
+async function markResponded(id,btn){
   btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i>';
   try{
-    var fd=new FormData(); fd.append('action','resolve_report'); fd.append('report_id',id);
+    var fd=new FormData(); fd.append('action','report_responded'); fd.append('report_id',id);
     var res=await fetch('../api/reports.php',{method:'POST',body:fd});
     var data=await res.json();
     if(data.status==='success') location.reload();
-    else{ alert(data.message||'Error.'); btn.disabled=false; btn.innerHTML='<i class="fas fa-circle-check"></i> Resolve'; }
-  }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-circle-check"></i> Resolve'; }
+    else{ alert(data.message||'Error.'); btn.disabled=false; btn.innerHTML='<i class="fas fa-bell"></i> Responded to LGU'; }
+  }catch(e){ btn.disabled=false; btn.innerHTML='<i class="fas fa-bell"></i> Responded to LGU'; }
 }
+
 
 // Auto-refresh queue every 90 seconds
 <?php if($view === 'queue'): ?>
 setTimeout(function(){location.reload();}, 90000);
 <?php endif; ?>
 </script>
+
+<div class="nav-modal-overlay" id="navModalOverlay">
+  <div class="nav-modal">
+    <div class="nav-modal-head">
+      <h3 id="navModalTitle"><i class="fas fa-route" style="margin-right:6px;color:var(--red-light);"></i>Navigation</h3>
+      <button class="nav-modal-close" onclick="closeNavModal()"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="navModalMap"><div id="navMapInner"></div></div>
+    <div class="nav-modal-info" id="navModalInfo"></div>
+  </div>
+</div>
 </body>
 </html>

@@ -8,6 +8,17 @@
  * DELETE or rename this file after successful installation.
  */
 
+// ── Lock check: prevent re-running installer after setup ─────────────────────
+$lockFile = __DIR__ . '/config/install.lock';
+if (file_exists($lockFile)) {
+    http_response_code(403);
+    die('<!DOCTYPE html><html><head><title>Installer Locked</title></head><body style="font-family:sans-serif;max-width:600px;margin:60px auto;text-align:center;">'
+      . '<h2>Installation already completed</h2>'
+      . '<p>For security, this installer is locked and cannot be run again.</p>'
+      . '<p>If you need to re-run setup, delete <code>config/install.lock</code> on the server first (not recommended on a live/production site).</p>'
+      . '<p><a href="login.php">Go to Login</a></p></body></html>');
+}
+
 // ── Connection Settings ──────────────────────────────────────────────────────
 define('DB_HOST', 'localhost');
 define('DB_USER', 'root');
@@ -167,6 +178,10 @@ run($conn, 'Create table <code>reports</code>',
         `upvotes`       INT(11)      NOT NULL DEFAULT 0,
         `downvotes`     INT(11)      NOT NULL DEFAULT 0,
         `is_archived`   TINYINT(1)   NOT NULL DEFAULT 0,
+        `assigned_to`   INT(11)      DEFAULT NULL COMMENT 'user_id of assigned responder',
+        `accepted_at`   DATETIME     DEFAULT NULL,
+        `responded_at`  DATETIME     DEFAULT NULL,
+        `resolved_at`   DATETIME     DEFAULT NULL,
         `created_at`    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
         `updated_at`    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (`id`),
@@ -197,7 +212,7 @@ run($conn, "Create table <code>report_audit_logs</code>",
     `id`                int(11)                              NOT NULL AUTO_INCREMENT,
     `report_id`         int(11)                              NOT NULL,
     `report_title`      varchar(255)                         NOT NULL,
-    `action`            enum('archived', 'restored')         NOT NULL,
+    `action`            VARCHAR(40)                         NOT NULL,
     `performed_by`      int(11)                              DEFAULT NULL,
     `performed_by_name` varchar(150)                         NOT NULL,
     `performed_at`      timestamp                            NOT NULL DEFAULT current_timestamp(),
@@ -363,6 +378,11 @@ if (!is_dir($uploadsDir)) {
 }
 
 $conn->close();
+
+// ── Lock the installer after a successful run ────────────────────────────────
+if ($success) {
+    @file_put_contents($lockFile, 'Installed at ' . date('c') . "\n");
+}
 
 render($steps, $success);
 
