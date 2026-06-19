@@ -271,7 +271,7 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
         <i class="fas fa-scroll"></i> Login Logs
       </button>
       <button class="menu-item" id="navSecurity" onclick="showTab('security')">
-        <i class="fas fa-shield-exclamation"></i> Security Monitor
+        <i class="fas fa-shield"></i> Security Monitor
       </button>
       <button class="menu-item" id="navContacts" onclick="showTab('contacts')">
         <i class="fas fa-address-book"></i> Emergency Contacts
@@ -455,7 +455,7 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
   <div class="panel">
     <div class="panel-header">
       <div class="panel-title">
-        <i class="fas fa-shield-exclamation"></i> Security Monitor
+        <i class="fas fa-shield"></i> Security Monitor
       </div>
       <span style="font-size:0.8rem;color:var(--muted);">Failed Login Attempts & Flagged Accounts</span>
     </div>
@@ -536,7 +536,7 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
             </div>
             <div style="flex:1;min-width:220px;">
               <div style="font-size:0.82rem;color:var(--muted);margin-bottom:6px;">Overall Security Score</div>
-              <div id="vulnerabilityScore" style="font-size:1.8rem;font-weight:800;color:var(--blue);">0/100</div>
+              <div id="vulnerabilityScore" style="font-size:1.8rem;font-weight:800;color:var(--red);">0/100</div>
             </div>
             <button class="btn-action approve" onclick="runVulnerabilityAssessment()" style="margin-top:8px;"><i class="fas fa-play"></i> Run Assessment</button>
           </div>
@@ -743,8 +743,9 @@ const tabTitles = {
   posts:'<i class="fas fa-clipboard-list" style="color:var(--blue);margin-right:8px;"></i>Manage Posts',
   audit:'<i class="fas fa-shield-halved" style="color:var(--blue);margin-right:8px;"></i>Reports Audit',
   logs:'<i class="fas fa-scroll" style="color:var(--blue);margin-right:8px;"></i>Login Logs',
-  security:'<i class="fas fa-shield-exclamation" style="color:var(--red);margin-right:8px;"></i>Security Monitor',
+  security:'<i class="fas fa-shield" style="color:var(--blue);margin-right:8px;"></i>Security Monitor',
   contacts:'<i class="fas fa-address-book" style="color:var(--blue);margin-right:8px;"></i>Emergency Contacts',
+  vulnerabilities:'<i class="fas fa-shield-alt" style="color:var(--blue);margin-right:8px;"></i>Vulnerability Assessment',
 };
 let pendingLoaded = false;
 function showTab(name){
