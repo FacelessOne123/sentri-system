@@ -87,7 +87,7 @@ sentri-system/
 5. Access the system:
    - Community:    `http://localhost/sentri-system/`
    - Admin panel:  `http://localhost/sentri-system/admin.php`
-   - Default admin: `admin@sentri.ph` / `Admin@1234`
+   - Default admin: set via `install.php` on first run — change immediately after setup
    ⚠️  Change the admin password immediately after first login.
 
 ---
