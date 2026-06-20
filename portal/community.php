@@ -64,9 +64,9 @@ $page_titles=['overview'=>'Community Feed','my_reports'=>'My Reports','map'=>'In
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title><?= htmlspecialchars($page_titles[$view]??'Community Portal') ?> — SenTri</title>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
+<link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
 <style>
 :root{--blue:#0a3d62;--blue-dark:#062444;--blue-light:#1a5276;--blue-accent:#3a8dff;--red:#e53e3e;--green:#38a169;--orange:#dd6b20;--gold:#f39c12;--text:#1a1a2e;--muted:#666;--border:#e5e7eb;--bg:#f0f2f7;--card:#fff;--card-border:#eee;--input-bg:#fafafa;--input-border:#e0e0e0;--input-focus:#fff;--topbar-bg:#fff;--topbar-shadow:0 2px 12px rgba(0,0,0,.07);--sidebar-w:256px;}
 body.dark{--bg:#0d1117;--card:#161b22;--card-border:#30363d;--text:#e6edf3;--muted:#8b949e;--border:#30363d;--input-bg:#0d1117;--input-border:#30363d;--input-focus:#161b22;--topbar-bg:#161b22;--topbar-shadow:0 2px 12px rgba(0,0,0,.4);}
@@ -775,7 +775,7 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
   <img id="lightboxImg" src="" alt="Photo">
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="../assets/vendor/leaflet/leaflet.js"></script>
 <script>
 const MY_USER_ID  = <?= $uid ?>;
 const CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';

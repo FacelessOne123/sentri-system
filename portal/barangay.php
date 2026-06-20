@@ -127,8 +127,8 @@ $page_titles = [
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title><?= $page_titles[$view] ?? 'Barangay Portal' ?> — SenTri</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
+<link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
 <style>
 :root{--green:#166534;--green-dark:#052e16;--green-mid:#14532d;--green-light:#16a34a;--gold:#f39c12;--navy:#0a3d62;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--bg:#f1f5f9;--card:#fff;--sidebar-w:256px;}
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
@@ -430,8 +430,8 @@ tr:hover td{background:#fafafa;}
 
   <?php elseif($view === 'map'): ?>
     <!-- ── INCIDENT MAP ── -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
+    <script src="../assets/vendor/leaflet/leaflet.js"></script>
     <?php
     $mapped    = count($map_reports);
     $unmapped  = $map_total_all - $mapped;
