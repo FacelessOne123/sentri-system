@@ -64,9 +64,9 @@ $page_titles=['overview'=>'Community Feed','my_reports'=>'My Reports','map'=>'In
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title><?= htmlspecialchars($page_titles[$view]??'Community Portal') ?> — SenTri</title>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
+<link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
 <style>
 :root{--blue:#0a3d62;--blue-dark:#062444;--blue-light:#1a5276;--blue-accent:#3a8dff;--red:#e53e3e;--green:#38a169;--orange:#dd6b20;--gold:#f39c12;--text:#1a1a2e;--muted:#666;--border:#e5e7eb;--bg:#f0f2f7;--card:#fff;--card-border:#eee;--input-bg:#fafafa;--input-border:#e0e0e0;--input-focus:#fff;--topbar-bg:#fff;--topbar-shadow:0 2px 12px rgba(0,0,0,.07);--sidebar-w:256px;}
 body.dark{--bg:#0d1117;--card:#161b22;--card-border:#30363d;--text:#e6edf3;--muted:#8b949e;--border:#30363d;--input-bg:#0d1117;--input-border:#30363d;--input-focus:#161b22;--topbar-bg:#161b22;--topbar-shadow:0 2px 12px rgba(0,0,0,.4);}
@@ -775,7 +775,7 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
   <img id="lightboxImg" src="" alt="Photo">
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="../assets/vendor/leaflet/leaflet.js"></script>
 <script>
 const MY_USER_ID  = <?= $uid ?>;
 const CURRENT_VIEW= '<?= htmlspecialchars($view) ?>';
@@ -876,14 +876,31 @@ function switchView(v){curView=v;const feedEl=document.getElementById('feed'),ma
 /* Marker icon */
 function markerIcon(status){const c=SC[status]||'#888';const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 30 38"><path d="M15 0C6.716 0 0 6.716 0 15c0 10 15 23 15 23S30 25 30 15 23.284 0 15 0z" fill="${c}" stroke="white" stroke-width="2"/><circle cx="15" cy="15" r="6" fill="white" opacity=".9"/></svg>`;return L.divIcon({html:svg,className:'',iconSize:[30,38],iconAnchor:[15,38],popupAnchor:[0,-38]});}
 
+/* Keep a Leaflet map's tile grid in sync with its container's real size.
+   Fixed-delay invalidateSize() calls are a guess; this reacts to the actual
+   size change whenever it happens — slow webfont loads, address-bar
+   show/hide, orientation change, sidebar toggle, etc. */
+function watchMapResize(getMap,el){
+  if(!el)return;
+  if('ResizeObserver' in window){
+    let raf=null;
+    new ResizeObserver(()=>{
+      const m=getMap();if(!m)return;
+      if(raf)cancelAnimationFrame(raf);
+      raf=requestAnimationFrame(()=>m.invalidateSize());
+    }).observe(el);
+  }
+  window.addEventListener('orientationchange',()=>{const m=getMap();if(m)setTimeout(()=>m.invalidateSize(),250);});
+}
+
 /* Inline map (overview toggle) */
 let inlineMap=null,inlineLayers=[];
-function initInlineMap(){if(!inlineMap){inlineMap=L.map('inlineMap').setView([14.5995,120.9842],11);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(inlineMap);setTimeout(()=>inlineMap.invalidateSize(),100);}renderInlineMap();}
+function initInlineMap(){if(!inlineMap){inlineMap=L.map('inlineMap').setView([14.5995,120.9842],11);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(inlineMap);watchMapResize(()=>inlineMap,document.getElementById('inlineMap'));setTimeout(()=>inlineMap.invalidateSize(),100);}renderInlineMap();}
 function renderInlineMap(){if(!inlineMap)return;inlineLayers.forEach(l=>inlineMap.removeLayer(l));inlineLayers=[];const list=getFiltered(false);const bounds=[];let pins=0;list.forEach(r=>{if(!r.latitude||!r.longitude)return;pins++;const ll=[r.latitude,r.longitude];bounds.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(inlineMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(inlineMap);mk.bindPopup(`<div style="min-width:200px;font-family:'Poppins',sans-serif;font-size:.82rem;padding:4px;"><div style="font-weight:800;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.location_name)}, ${esc(r.city)}</div><div style="color:#888;font-size:.74rem;margin-top:3px;">${esc(r.poster_name)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div>`,{maxWidth:280});inlineLayers.push(ci,mk);});if(bounds.length)inlineMap.fitBounds(bounds,{padding:[50,50],maxZoom:15});const cnt=document.getElementById('inlineMapCount');if(cnt)cnt.textContent=`${pins} of ${list.length} reports pinned`;setTimeout(()=>inlineMap.invalidateSize(),300);setTimeout(()=>inlineMap.invalidateSize(),600);}
 
 /* Full incidents map */
 let mainMap=null,mainLayers=[];
-function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.5995,120.9842],11);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);}mainLayers.forEach(l=>mainMap.removeLayer(l));mainLayers=[];const bounds=[];let pins=0;allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;pins++;const ll=[r.latitude,r.longitude];bounds.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(mainMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(mainMap);const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});const fp=r.images&&r.images.length>0?r.images[0]:null;const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';const popup=`<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div><div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;mk.bindTooltip(popup,{direction:'top',offset:[0,-38],opacity:1,sticky:false,permanent:false});mk.bindPopup(popup,{maxWidth:280});mainLayers.push(ci,mk);});if(bounds.length)mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});const cnt=document.getElementById('mapCount');if(cnt)cnt.textContent=`${pins} pinned report${pins!==1?'s':''}`;setTimeout(()=>mainMap.invalidateSize(),300);setTimeout(()=>mainMap.invalidateSize(),600);}
+function renderMainMap(){if(!mainMap){mainMap=L.map('incidentMap').setView([14.5995,120.9842],11);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',maxZoom:19}).addTo(mainMap);watchMapResize(()=>mainMap,document.getElementById('incidentMap'));}mainLayers.forEach(l=>mainMap.removeLayer(l));mainLayers=[];const bounds=[];let pins=0;allReports.forEach(r=>{if(!r.latitude||!r.longitude)return;pins++;const ll=[r.latitude,r.longitude];bounds.push(ll);const ci=L.circle(ll,{radius:r.radius_m||200,color:SC[r.status]||'#888',fillColor:SF[r.status],fillOpacity:1,weight:2,dashArray:'6 4'}).addTo(mainMap);const mk=L.marker(ll,{icon:markerIcon(r.status)}).addTo(mainMap);const date=new Date(r.created_at).toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});const fp=r.images&&r.images.length>0?r.images[0]:null;const ph=fp?`<img src="${esc(fp)}" style="width:100%;height:120px;object-fit:cover;display:block;" onerror="this.style.display='none'">`:'';const popup=`<div style="min-width:210px;max-width:260px;font-family:'Poppins',sans-serif;font-size:.82rem;overflow:hidden;border-radius:10px;">${fp?`<div style="overflow:hidden;border-radius:10px 10px 0 0;">${ph}</div>`:''}<div style="padding:10px 12px;"><div style="font-weight:800;font-size:.93rem;margin-bottom:6px;">${esc(r.title)}</div><span style="display:inline-block;background:${SC[r.status]};color:#fff;padding:2px 10px;border-radius:50px;font-size:.69rem;font-weight:700;text-transform:uppercase;margin-bottom:8px;">${ucFirst(r.status)}</span><div style="color:#555;">${esc(r.poster_name)} · ${date}</div><div style="color:#888;margin-top:3px;">${esc(r.location_name)}, ${esc(r.city)}</div><button onclick="openDetail(${r.id})" style="display:block;width:100%;margin-top:10px;padding:7px;background:#1a5276;color:#fff;border:none;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;">Full Details</button></div></div>`;mk.bindTooltip(popup,{direction:'top',offset:[0,-38],opacity:1,sticky:false,permanent:false});mk.bindPopup(popup,{maxWidth:280});mainLayers.push(ci,mk);});if(bounds.length)mainMap.fitBounds(bounds,{padding:[50,50],maxZoom:14});const cnt=document.getElementById('mapCount');if(cnt)cnt.textContent=`${pins} pinned report${pins!==1?'s':''}`;setTimeout(()=>mainMap.invalidateSize(),300);setTimeout(()=>mainMap.invalidateSize(),600);}
 
 /* Map picker */
 let pickerMap=null,pickerMarker=null,pickerCircle=null,pickerRadius=200;
@@ -1069,6 +1086,11 @@ startGPS();
 if(document.getElementById('colorPalette'))buildPalette();
 if(['overview','my_reports','map'].includes(CURRENT_VIEW)){fetchReports();setInterval(fetchReports,60000);}
 if(CURRENT_VIEW==='map')setTimeout(()=>renderMainMap(),300);
+/* On slow connections, self-hosted fonts/icons can keep streaming in and
+   reflowing the layout well after the maps first render. Re-sync once
+   everything has actually finished loading, on top of the ResizeObserver. */
+if(document.fonts&&document.fonts.ready){document.fonts.ready.then(()=>{if(mainMap)mainMap.invalidateSize();if(inlineMap)inlineMap.invalidateSize();});}
+window.addEventListener('load',()=>{if(mainMap)mainMap.invalidateSize();if(inlineMap)inlineMap.invalidateSize();});
 </script>
 </body>
 </html>

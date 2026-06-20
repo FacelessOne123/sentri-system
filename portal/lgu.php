@@ -254,8 +254,8 @@ $page_titles = [
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title><?= $page_titles[$view] ?? 'LGU Portal' ?> — SenTri</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<link rel="stylesheet" href="../assets/vendor/fonts/fonts.css">
+<link rel="stylesheet" href="../assets/vendor/fontawesome/css/all.min.css">
 <style>
 :root{
   --navy:#0a3d62;--navy-dark:#062444;--navy-light:#1a5276;
@@ -763,8 +763,8 @@ tr:hover td{background:#fafafa;}
 
     <?php elseif($view === 'map'): ?>
     <!-- ── INCIDENT MAP ── -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <link rel="stylesheet" href="../assets/vendor/leaflet/leaflet.css">
+    <script src="../assets/vendor/leaflet/leaflet.js"></script>
     <style>
     .map-wrap{position:relative;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,0.1);border:1px solid var(--border);}
     #incidentMap{height:520px;width:100%;background:#e8f0f8;}
