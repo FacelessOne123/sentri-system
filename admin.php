@@ -514,13 +514,13 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
 
  <!-- ── SECURITY MONITOR TAB ── -->
 <div class="tab-panel" id="tab-security">
-  <div class="panel">
-    <div class="panel-header">
-      <div class="panel-title">
-        <i class="fas fa-shield-exclamation"></i> Security Monitor
-      </div>
-      <span style="font-size:0.8rem;color:var(--muted);">Failed Login Attempts & Flagged Accounts</span>
-    </div>
+ <div class="panel">
+ <div class="panel-header">
+ <div class="panel-title">
+ <i class="fas fa-shield-exclamation"></i> Security Monitor
+ </div>
+ <span style="font-size:0.8rem;color:var(--muted);">Failed Login Attempts & Flagged Accounts</span>
+ </div>
 
  <!-- Risk Summary -->
  <div class="stats-row" style="margin-bottom:20px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
@@ -584,43 +584,43 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </div>
 </div>
 
-    <div class="modal-overlay vuln-modal" id="vulnerabilityModalOverlay" onclick="if(event.target===this) closeVulnerabilityModal()">
-      <div class="modal-dialog">
-        <div class="panel">
-          <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
-            <div class="panel-title"><i class="fas fa-biohazard"></i> Vulnerability Assessment</div>
-            <button class="close-modal-btn" onclick="closeVulnerabilityModal()" aria-label="Close"><i class="fas fa-xmark"></i></button>
-          </div>
-          <div class="filter-bar" style="align-items:flex-start; gap:16px; padding:0 24px 18px;">
-            <div style="flex:1;min-width:220px;">
-              <div style="font-size:0.82rem;color:var(--muted);margin-bottom:6px;">Last Scan Date</div>
-              <div id="lastScanDate" style="font-weight:700;color:var(--text);">Never</div>
-            </div>
-            <div style="flex:1;min-width:220px;">
-              <div style="font-size:0.82rem;color:var(--muted);margin-bottom:6px;">Overall Security Score</div>
-              <div id="vulnerabilityScore" style="font-size:1.8rem;font-weight:800;color:var(--blue);">0/100</div>
-            </div>
-            <button class="btn-action approve" onclick="runVulnerabilityAssessment()" style="margin-top:8px;"><i class="fas fa-play"></i> Run Assessment</button>
-          </div>
-          <div class="vuln-row" id="vulnSummaryRow" style="padding:0 24px 18px;">
-            <div class="vuln-card" id="vulnCardHttps"><strong>HTTPS</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Check if HTTPS is enabled.</div></div>
-            <div class="vuln-card" id="vulnCardSession"><strong>Session Security</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Inspect session cookie settings.</div></div>
-            <div class="vuln-card" id="vulnCardPassword"><strong>Password Hashing</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Verify bcrypt/password_hash usage.</div></div>
-            <div class="vuln-card" id="vulnCardHeaders"><strong>Security Headers</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Check standard response headers.</div></div>
-            <div class="vuln-card" id="vulnCardUpload"><strong>Upload Restrictions</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Confirm file upload restrictions.</div></div>
-          </div>
-          <div class="table-wrap" style="margin-top:0;padding:0 24px 24px;">
-            <table id="vulnHistoryTable" style="display:none; width:100%;">
-              <thead>
-                <tr><th>#</th><th>Date</th><th>Score</th><th>HTTPS</th><th>Session</th><th>Password</th><th>Headers</th><th>Uploads</th></tr>
-              </thead>
-              <tbody id="vulnHistoryBody"></tbody>
-            </table>
-            <div class="loading" id="vulnHistoryLoading"><i class="fas fa-spinner"></i> Loading vulnerability history...</div>
-          </div>
-        </div>
-      </div>
-    </div>
+ <div class="modal-overlay vuln-modal" id="vulnerabilityModalOverlay" onclick="if(event.target===this) closeVulnerabilityModal()">
+ <div class="modal-dialog">
+ <div class="panel">
+ <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+ <div class="panel-title"><i class="fas fa-biohazard"></i> Vulnerability Assessment</div>
+ <button class="close-modal-btn" onclick="closeVulnerabilityModal()" aria-label="Close"><i class="fas fa-xmark"></i></button>
+ </div>
+ <div class="filter-bar" style="align-items:flex-start; gap:16px; padding:0 24px 18px;">
+ <div style="flex:1;min-width:220px;">
+ <div style="font-size:0.82rem;color:var(--muted);margin-bottom:6px;">Last Scan Date</div>
+ <div id="lastScanDate" style="font-weight:700;color:var(--text);">Never</div>
+ </div>
+ <div style="flex:1;min-width:220px;">
+ <div style="font-size:0.82rem;color:var(--muted);margin-bottom:6px;">Overall Security Score</div>
+ <div id="vulnerabilityScore" style="font-size:1.8rem;font-weight:800;color:var(--blue);">0/100</div>
+ </div>
+ <button class="btn-action approve" onclick="runVulnerabilityAssessment()" style="margin-top:8px;"><i class="fas fa-play"></i> Run Assessment</button>
+ </div>
+ <div class="vuln-row" id="vulnSummaryRow" style="padding:0 24px 18px;">
+ <div class="vuln-card" id="vulnCardHttps"><strong>HTTPS</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Check if HTTPS is enabled.</div></div>
+ <div class="vuln-card" id="vulnCardSession"><strong>Session Security</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Inspect session cookie settings.</div></div>
+ <div class="vuln-card" id="vulnCardPassword"><strong>Password Hashing</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Verify bcrypt/password_hash usage.</div></div>
+ <div class="vuln-card" id="vulnCardHeaders"><strong>Security Headers</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Check standard response headers.</div></div>
+ <div class="vuln-card" id="vulnCardUpload"><strong>Upload Restrictions</strong><div class="vuln-status">Pending</div><div class="vuln-detail">Confirm file upload restrictions.</div></div>
+ </div>
+ <div class="table-wrap" style="margin-top:0;padding:0 24px 24px;">
+ <table id="vulnHistoryTable" style="display:none; width:100%;">
+ <thead>
+ <tr><th>#</th><th>Date</th><th>Score</th><th>HTTPS</th><th>Session</th><th>Password</th><th>Headers</th><th>Uploads</th></tr>
+ </thead>
+ <tbody id="vulnHistoryBody"></tbody>
+ </table>
+ <div class="loading" id="vulnHistoryLoading"><i class="fas fa-spinner"></i> Loading vulnerability history...</div>
+ </div>
+ </div>
+ </div>
+ </div>
 
  <div class="tab-panel" id="tab-contacts">
  <div class="panel">
@@ -801,14 +801,14 @@ function closeSidebar(){
 
 // ── Tab navigation ────────────────────────────────────────────
 const tabTitles = {
-  overview:'<i class="fas fa-gauge" style="color:var(--blue);margin-right:8px;"></i>Overview',
-  users:'<i class="fas fa-users" style="color:var(--blue);margin-right:8px;"></i>Manage Users',
-  pending:'<i class="fas fa-clock" style="color:#d97706;margin-right:8px;"></i>Pending Approvals',
-  posts:'<i class="fas fa-clipboard-list" style="color:var(--blue);margin-right:8px;"></i>Manage Posts',
-  audit:'<i class="fas fa-shield-halved" style="color:var(--blue);margin-right:8px;"></i>Reports Audit',
-  logs:'<i class="fas fa-scroll" style="color:var(--blue);margin-right:8px;"></i>Login Logs',
-  security:'<i class="fas fa-shield-exclamation" style="color:var(--red);margin-right:8px;"></i>Security Monitor',
-  contacts:'<i class="fas fa-address-book" style="color:var(--blue);margin-right:8px;"></i>Emergency Contacts',
+ overview:'<i class="fas fa-gauge" style="color:var(--blue);margin-right:8px;"></i>Overview',
+ users:'<i class="fas fa-users" style="color:var(--blue);margin-right:8px;"></i>Manage Users',
+ pending:'<i class="fas fa-clock" style="color:#d97706;margin-right:8px;"></i>Pending Approvals',
+ posts:'<i class="fas fa-clipboard-list" style="color:var(--blue);margin-right:8px;"></i>Manage Posts',
+ audit:'<i class="fas fa-shield-halved" style="color:var(--blue);margin-right:8px;"></i>Reports Audit',
+ logs:'<i class="fas fa-scroll" style="color:var(--blue);margin-right:8px;"></i>Login Logs',
+ security:'<i class="fas fa-shield-exclamation" style="color:var(--red);margin-right:8px;"></i>Security Monitor',
+ contacts:'<i class="fas fa-address-book" style="color:var(--blue);margin-right:8px;"></i>Emergency Contacts',
 };
 let pendingLoaded = false;
 function showTab(name){
