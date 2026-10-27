@@ -9,15 +9,20 @@
 sentri-system/
 │
 ├── index.php # Landing / welcome page
-├── login.php # Multi-portal login (community, barangay, LGU, responder, admin)
-├── signup.php # New user registration with role selector + auto-migration
-├── logout.php # Session destroy
+├── login.php # Community portal sign-in (community accounts only)
+├── signup.php # Community registration (community accounts only)
+├── logout.php # Session destroy (returns user to their portal's sign-in page)
 ├── dashboard.php # Main community feed, map, report form
-├── admin.php # Admin control panel (reports, users, audit log, security monitor)
+├── admin.php # Admin control panel - renders its own sign-in form when logged out;
+│ # deliberately NOT linked from any other page
 ├── forgot_password.php # Password reset request
 ├── reset_password.php # Password reset (via token)
 ├── verify_email.php # Email verification handler + resend endpoint
 ├── install.php # One-time DB installer - delete after use
+│
+├── gov/
+│ └── login.php # Government portal sign-in (barangay / LGU / first responder);
+│ # no self-registration - officials are provisioned by the admin
 │
 ├── config/
 │ ├── db.php # Database connection (MySQLi, socket + TCP fallback)
@@ -26,10 +31,12 @@ sentri-system/
 │ ├── csrf.php # CSRF token generation and validation
 │
 ├── core/
-│ └── SenTriMailer.php # Minimal Gmail SMTP mailer - dynamic APP_URL, no Composer
+│ ├── SenTriMailer.php # Minimal Gmail SMTP mailer - dynamic APP_URL, no Composer
+│ └── login_handler.php # Shared sign-in POST handler (lockout, role whitelist, logs)
 │
 ├── api/
-│ ├── reports.php # Reports CRUD, voting, profile, GPS, image upload, audit log
+│ ├── reports.php # Reports CRUD, voting, profile, GPS, image upload, audit log;
+│ │ # admin user management incl. admin_create_official (provisioning)
 │ ├── contacts.php # Emergency contacts CRUD + notification dispatch
 │ ├── geocode_proxy.php # Server-side Nominatim proxy (CORS-safe)
 │ └── security.php # Security Monitor endpoint (failed logins, audit events)
@@ -53,7 +60,8 @@ sentri-system/
  ├── 003_profile.sql # Avatar colour, GPS columns
  ├── 004_report_images.sql # Photo upload table
  ├── 005_emergency_contacts.sql # LGU/Hospital/Traffic contacts
- └── 006_roles.sql # Expanded role ENUM + community columns
+ ├── 006_roles.sql # Expanded role ENUM + community columns
+ └── 007_force_password_reset.sql # Force password change on provisioned accounts
 ```
 
 ---
@@ -86,7 +94,8 @@ sentri-system/
 
 5. Access the system:
  - Community: `http://localhost/sentri-system/`
- - Admin panel: `http://localhost/sentri-system/admin.php`
+ - Government portal (barangay / LGU / first responder): `http://localhost/sentri-system/gov/login.php`
+ - Admin panel (renders its own sign-in; not linked from any other page): `http://localhost/sentri-system/admin.php`
  - Default admin: set via `install.php` on first run - change immediately after setup
  ⚠️ Change the admin password immediately after first login.
 
@@ -149,12 +158,21 @@ Leave it as `http://localhost` to keep auto-detection active everywhere.
 - **First Responder** - BFP / PNP / EMS response view (with responder type)
 - **Admin** - full moderation, user management, audit log, security monitor
 
-Official roles (Barangay, LGU, First Responder) skip email verification and go
-through administrator approval instead.
+Each role signs in on its own dedicated page:
+- Community members: `login.php` (self-registration via `signup.php`, email verification required)
+- Government officials: `gov/login.php` (no self-registration)
+- Administrators: `admin.php` (renders its own sign-in form; the URL is not linked from any other page)
+
+Government accounts (Barangay, LGU, First Responder) are **provisioned by the
+system administrator** from the admin panel (Users tab → Create Official
+Account). They are created pre-approved with a temporary password and are
+required to set their own password at first sign-in; credentials are emailed
+to the official. Legacy self-registered official accounts still go through
+administrator approval (Users tab → Approve).
 
 ### Admin Panel
 - Moderate reports (archive / restore / delete)
-- Manage user accounts and roles; approve pending official accounts
+- Manage user accounts and roles; approve pending official accounts; provision new official accounts (Users tab → Create Official Account)
 - Emergency Contacts directory - LGU offices, hospitals, traffic, police, fire
 - Reports Audit Log - full create/edit/delete history
 - Security Monitor tab - failed login tracking, suspicious activity
@@ -218,6 +236,7 @@ emergency contacts whose city (and optionally barangay) matches the report locat
 
 | Date | Change |
 |------------|--------|
+| 2026-10-27 | **feat:** Portal separation - government sign-in moved to `gov/login.php` (barangay/LGU/responder, no self-registration); community sign-in/registration simplified to community-only; admin panel renders its own unlinked sign-in; officials provisioned by admin (`admin_create_official`) with emailed credentials and forced password change on first sign-in (migration 007); shared auth logic extracted to `core/login_handler.php`; danger-alert emails now link to the government portal instead of admin |
 | 2026-06-11 | feat: Live GTA-style heading-up in-app navigation (Leaflet/OSM) replacing Google Maps redirects; auto-arrival detection |
 | 2026-06-11 | feat: Auto-arrival resolves report without flipping status to Safe; added Resolved/Unresolved badge |
 | 2026-06-11 | fix: Duplicate responder marker on repeat navigation |

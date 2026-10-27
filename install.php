@@ -16,7 +16,7 @@ if (file_exists($lockFile)) {
  . '<h2>Installation already completed</h2>'
  . '<p>For security, this installer is locked and cannot be run again.</p>'
  . '<p>If you need to re-run setup, delete <code>config/install.lock</code> on the server first (not recommended on a live/production site).</p>'
- . '<p><a href="login.php">Go to Login</a></p></body></html>');
+ . '<p><a href="admin.php">Go to Admin Panel</a> &middot; <a href="login.php">Community Login</a></p></body></html>');
 }
 
 // ── Connection Settings ──────────────────────────────────────────────────────
@@ -466,7 +466,8 @@ function render(array $steps, bool $success): void { ?>
  </div>
  <div class="actions">
  <a href="index.php" class="btn btn-primary"><i class="fas fa-arrow-right"></i> Go to SenTri</a>
- <a href="login.php" class="btn btn-primary" style="background:#38a169;"><i class="fas fa-right-to-bracket"></i> Log In</a>
+ <a href="admin.php" class="btn btn-primary" style="background:#38a169;"><i class="fas fa-gear"></i> Open Admin Panel</a>
+ <a href="login.php" class="btn btn-primary" style="background:#38a169;"><i class="fas fa-right-to-bracket"></i> Community Log In</a>
  </div>
  <div class="warning-box">
  <i class="fas fa-triangle-exclamation"></i>

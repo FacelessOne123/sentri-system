@@ -41,9 +41,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
  $hash = password_hash($pw, PASSWORD_BCRYPT, ['cost' => 12]);
 
- // Update password + clear reset token + ensure verified
+ // Update password + clear reset token + clear force flag + ensure verified
  $upd = $conn->prepare(
- "UPDATE users SET password=?, reset_token=NULL, reset_token_expires=NULL, email_verified=1
+ "UPDATE users SET password=?, reset_token=NULL, reset_token_expires=NULL, force_password_reset=0, email_verified=1
  WHERE id=?"
  );
  $upd->bind_param("si", $hash, $tokenUser['id']);
@@ -142,7 +142,8 @@ p.sub{font-size:0.9rem;color:var(--muted);line-height:1.7;margin-bottom:24px;}
  <i class="fas fa-paper-plane"></i> Request New Reset Link
  </a>
  <?php endif; ?>
- <a href="login.php" class="btn-ghost-link"><i class="fas fa-arrow-left"></i> Back to Sign In</a>
+ <a href="login.php" class="btn-ghost-link"><i class="fas fa-arrow-left"></i> Back to Community Sign In</a>
+ <a href="gov/login.php" class="btn-ghost-link"><i class="fas fa-landmark"></i> Government Portal Sign In</a>
 </div>
 
 <script>

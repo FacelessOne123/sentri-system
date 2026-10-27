@@ -127,11 +127,13 @@ footer{background:var(--navy-dark);color:rgba(255,255,255,0.45);padding:28px 40p
  <div class="nav-links">
  <a href="login.php" class="btn-outline">Sign In</a>
  <a href="signup.php" class="btn-solid">Register</a>
+ <a href="gov/login.php" class="btn-outline" style="border-color:#f39c12;color:#d68910;"><i class="fas fa-landmark"></i> Government Portal</a>
  </div>
  <button class="ham-nav" onclick="toggleNav()"><i class="fas fa-bars" id="hamIcon"></i></button>
  <div class="mobile-nav" id="mobileNav">
  <a href="login.php">Sign In</a>
  <a href="signup.php" class="solid">Register</a>
+ <a href="gov/login.php">Government Portal</a>
  </div>
 </nav>
 
@@ -231,6 +233,7 @@ footer{background:var(--navy-dark);color:rgba(255,255,255,0.45);padding:28px 40p
  <h2>Ready to Get Started?</h2>
  <p>Join your community or sign in to your official government portal today.</p>
  <a href="signup.php"><i class="fas fa-shield-halved"></i> Create Your Account</a>
+ <a href="gov/login.php" style="margin-left:12px;border:2px solid rgba(255,255,255,0.4);border-radius:12px;padding:14px 26px;color:#fff;text-decoration:none;font-weight:700;"><i class="fas fa-landmark"></i> Government Portal</a>
 </section>
 
 <footer>
