@@ -246,7 +246,7 @@ if ($stmt->num_rows > 0) {
  $u->bind_param("si", $reset_tok, $id); $u->execute(); $u->close();
  $lg=$conn->prepare("INSERT INTO login_logs(user_id,email,ip_address,device,status)VALUES(?,?,?,?,?)");
  $lg->bind_param("issss",$id,$email,$ip,$device,$log_status); $lg->execute(); $lg->close();
- echo json_encode(['status'=>'must_reset','message'=>'For security, you must set a new password before signing in.','redirect'=>'reset_password.php?token='.$reset_tok]);
+ echo json_encode(['status'=>'must_reset','message'=>'For security, you must set a new password before signing in.','redirect'=>'/reset_password.php?token='.$reset_tok]);
  exit;
  }
  session_regenerate_id(true);

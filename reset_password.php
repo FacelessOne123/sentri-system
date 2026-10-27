@@ -2,6 +2,7 @@
 session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
 if (isset($_SESSION['user_id'])) { require_once __DIR__ . '/config/auth.php'; redirect_to_portal(); }
 require __DIR__ . '/config/db.php';
+require_once __DIR__ . '/config/auth.php';
 
 $token = trim($_GET['token'] ?? '');
 $tokenOk = false;
@@ -52,7 +53,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  echo json_encode([
  'status' => 'success',
  'message' => 'Password reset successfully! Redirecting to sign in...',
- 'redirect' => 'login.php?reset=success',
+ // Officials are sent back to their own portal's sign-in (gov/login.php), community to login.php.
+ 'redirect' => login_url_for_role($tokenUser['role']).'?reset=success',
  ]);
  exit;
 }
