@@ -242,8 +242,8 @@ switch ($action) {
  'Dangerous Incident Alert',
  'Dear ' . htmlspecialchars($contact['name']) . ',',
  "A <strong>DANGEROUS</strong> incident (<strong>" . htmlspecialchars(strtoupper($r_cat)) . "</strong>) has been reported at: <strong>" . htmlspecialchars($loc_line) . "</strong><br><br>" . nl2br(htmlspecialchars($r_desc)),
- defined('APP_URL') ? APP_URL . '/admin.php' : '#',
- 'Open Admin Panel',
+ defined('APP_URL') ? APP_URL . '/gov/login.php' : '#',
+ 'Open Government Portal',
  'This is an automated safety alert from SenTri. Please respond as appropriate.'
  );
  try {

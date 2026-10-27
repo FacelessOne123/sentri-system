@@ -107,7 +107,8 @@ p.sub{font-size:0.9rem;color:var(--muted);line-height:1.7;margin-bottom:24px;}
  </div>
  <button class="btn-primary" type="submit" id="submitBtn"><i class="fas fa-paper-plane"></i> Send Reset Link</button>
  </form>
- <a href="login.php" class="back-link"><i class="fas fa-arrow-left"></i> Back to Sign In</a>
+ <a href="login.php" class="back-link"><i class="fas fa-arrow-left"></i> Back to Community Sign In</a>
+ <a href="gov/login.php" class="back-link" style="margin-top:10px;"><i class="fas fa-landmark"></i> Government Portal Sign In</a>
 </div>
 
 <script>

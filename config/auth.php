@@ -2,9 +2,23 @@
 // config/auth.php - Role guard and portal redirect helper
 require_once __DIR__ . '/csrf.php';
 
+function login_url_for_role($role) {
+ // Each role signs in on its own page:
+ // community -> login.php, officials -> gov/login.php, admin -> admin.php
+ switch($role) {
+ case 'barangay':
+ case 'lgu':
+ case 'first_responder': return '/gov/login.php';
+ case 'admin': return '/admin.php';
+ case 'community':
+ case 'user':
+ default: return '/login.php';
+ }
+}
+
 function require_login() {
  if (!isset($_SESSION['user_id'])) {
- header('Location: /login.php'); exit;
+ header('Location: ' . login_url_for_role($_SESSION['role'] ?? 'community')); exit;
  }
 }
 
@@ -19,8 +33,9 @@ function require_role($allowed) {
 function require_approved() {
  require_login();
  if (!($_SESSION['is_approved'] ?? false)) {
+ $role = $_SESSION['role'] ?? 'community';
  session_destroy();
- header('Location: /login.php?pending=1'); exit;
+ header('Location: ' . login_url_for_role($role) . '?pending=1'); exit;
  }
 }
 
@@ -38,6 +53,10 @@ function portal_url($role) {
 
 function redirect_to_portal() {
  header('Location: ' . portal_url($_SESSION['role'] ?? 'community')); exit;
+}
+
+function gov_login_url() {
+ return '/gov/login.php';
 }
 
 function role_label($role) {

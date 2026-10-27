@@ -1,10 +1,99 @@
 <?php
+ini_set('display_errors', 0);
 session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
- header("Location: login.php"); exit;
-}
+require_once __DIR__ . '/config/db.php';
 require_once __DIR__ . '/config/auth.php';
-require __DIR__ . '/config/db.php';
+require_once __DIR__ . '/config/csrf.php';
+
+// Admin sign-in is handled on this page directly. There are deliberately NO
+// links to admin.php from any community or government page - the panel is
+// only reachable by typing its URL.
+$SENTRI_PORTALS = ['admin' => ['admin']];
+require __DIR__ . '/core/login_handler.php';
+
+if (!isset($_SESSION['user_id']) || ($_SESSION['role'] ?? '') !== 'admin') {
+ ?><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Restricted</title>
+<link rel="stylesheet" href="assets/vendor/fonts/fonts.css">
+<link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
+<style>
+:root{--blue:#1c57b2;--blue-light:#3a8dff;--text:#1a1a2e;--muted:#6b7280;}
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}
+body{min-height:100vh;background:#0f1629;display:flex;align-items:center;justify-content:center;padding:24px;}
+.card{background:#fff;border-radius:16px;padding:32px 30px 26px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.35);}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;}
+.brand-icon{width:38px;height:38px;background:linear-gradient(135deg,#7c3aed,#5b21b6);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.05rem;color:#fff;}
+.brand-name{font-size:1.15rem;font-weight:800;color:var(--text);}
+h1{font-size:1.15rem;font-weight:800;color:var(--text);margin-bottom:4px;}
+p.sub{font-size:0.8rem;color:var(--muted);line-height:1.5;margin-bottom:18px;}
+.form-group{margin-bottom:12px;}
+.form-group label{display:block;font-size:0.78rem;font-weight:600;color:#374151;margin-bottom:4px;}
+.form-group input{width:100%;padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:0.88rem;outline:none;background:#fafafa;transition:border-color 0.15s;}
+.form-group input:focus{border-color:#a78bfa;box-shadow:0 0 0 3px rgba(124,58,237,0.12);}
+.btn-login{width:100%;min-height:42px;padding:10px 14px;border:none;border-radius:9px;font-size:0.9rem;font-weight:700;cursor:pointer;color:#fff;background:linear-gradient(135deg,#7c3aed,#5b21b6);display:flex;align-items:center;justify-content:center;gap:8px;margin-top:6px;}
+.btn-login:hover:not(:disabled){filter:brightness(1.05);}
+.btn-login:disabled{opacity:0.6;cursor:not-allowed;}
+.msg{padding:8px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:11px;display:none;text-align:center;}
+.msg.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
+.msg.success{background:#f0fdf4;color:#14532d;border:1px solid #bbf7d0;}
+.pw-wrap{position:relative;}
+.pw-wrap .toggle-pw{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#6b7280;font-size:0.75rem;font-weight:700;}
+</style>
+</head>
+<body>
+ <div class="card">
+ <div class="brand">
+ <div class="brand-icon"><i class="fas fa-gear"></i></div>
+ <div class="brand-name">SenTri Admin</div>
+ </div>
+ <h1>System Administrator Access</h1>
+ <p class="sub">Restricted area. This page is not linked anywhere - bookmark the URL to return here.</p>
+ <div id="loginMsg" class="msg"></div>
+ <form id="loginForm" novalidate>
+ <input type="hidden" name="portal" value="admin">
+ <div class="form-group"><label>Admin Email / Username</label><input type="text" name="email" id="emailField" required autocomplete="username"></div>
+ <div class="form-group"><label>Password</label><div class="pw-wrap"><input type="password" name="password" id="pwField" required autocomplete="current-password"><button type="button" class="toggle-pw" onclick="togglePw()">SHOW</button></div></div>
+ <button type="submit" class="btn-login" id="loginBtn"><i class="fas fa-right-to-bracket"></i> <span id="loginBtnLabel">Access Admin Panel</span></button>
+ </form>
+ </div>
+<script>
+let timerInterval = null;
+function togglePw(){const f=document.getElementById('pwField');const b=f.nextElementSibling;const s=f.type==='password';f.type=s?'text':'password';b.textContent=s?'HIDE':'SHOW';}
+function showMsg(type,text){const el=document.getElementById('loginMsg');el.className='msg '+type;el.textContent=text;el.style.display='block';}
+function restoreBtn(){const btn=document.getElementById('loginBtn');btn.disabled=false;btn.innerHTML='<i class="fas fa-right-to-bracket"></i> <span id="loginBtnLabel">Access Admin Panel</span>';}
+function startLockTimer(seconds){
+ const btn=document.getElementById('loginBtn');const msg=document.getElementById('loginMsg');
+ btn.disabled=true;let t=seconds;
+ if(timerInterval)clearInterval(timerInterval);
+ showMsg('error',`Too many failed attempts. Please wait ${t} seconds before trying again.`);
+ timerInterval=setInterval(()=>{
+ t--;
+ btn.innerHTML=`<i class="fas fa-lock"></i> Wait ${t}s`;
+ showMsg('error',`Too many failed attempts. Please wait ${t} seconds before trying again.`);
+ if(t<=0){clearInterval(timerInterval);restoreBtn();msg.style.display='none';}
+ },1000);
+}
+document.getElementById('loginForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const btn=document.getElementById('loginBtn');const msg=document.getElementById('loginMsg');
+ btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Signing in...';msg.style.display='none';
+ try{
+ const res=await fetch('admin.php',{method:'POST',body:new FormData(e.target)});
+ const data=await res.json();
+ if(data.status==='success'){showMsg('success',data.message||'Signing in...');setTimeout(()=>window.location.href=data.redirect,700);}
+ else{showMsg('error',data.message||'Sign in failed.');if(data.lockout){startLockTimer(30);}else{restoreBtn();}}
+ }catch{showMsg('error','Connection error. Please try again.');restoreBtn();}
+});
+</script>
+</body>
+</html>
+<?php
+ exit;
+}
 
 $total_users = $conn->query("SELECT COUNT(*) FROM users")->fetch_row()[0];
 $total_reports = $conn->query("SELECT COUNT(*) FROM reports WHERE is_archived=0")->fetch_row()[0];
@@ -437,7 +526,10 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  <div class="panel">
  <div class="panel-header">
  <div class="panel-title"><i class="fas fa-users"></i> User Accounts</div>
+ <div style="display:flex;align-items:center;gap:12px;">
  <span id="userTotal" style="font-size:0.8rem;color:var(--muted);"></span>
+ <button type="button" onclick="openCreateOfficialModal()" style="background:linear-gradient(135deg,#16a34a,#166534);color:#fff;border:none;padding:8px 16px;border-radius:9px;font-size:0.78rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-user-shield"></i> Create Official Account</button>
+ </div>
  </div>
  <div class="filter-bar">
  <input type="text" id="userSearch" placeholder="Search name or email...">
@@ -778,6 +870,61 @@ tr:hover td{background:#fafbff;transition:background 0.15s;}
  </div>
  </div>
 
+<!-- CREATE OFFICIAL ACCOUNT MODAL -->
+ <div class="modal-overlay" id="createOfficialModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
+ <div style="background:var(--card);border-radius:16px;padding:28px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+ <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+ <h3 style="font-size:1.05rem;font-weight:700;"><i class="fas fa-user-shield" style="color:#166534;margin-right:8px;"></i>Create Official Account</h3>
+ <button onclick="closeCreateOfficialModal()" style="background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted);"><i class="fas fa-xmark"></i></button>
+ </div>
+ <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;line-height:1.5;">Provision a barangay, LGU, or first responder account. The account is created pre-approved, and credentials are emailed to the official. A password change is forced on first sign-in.</p>
+ <div id="createOfficialMsg" class="msg" style="padding:9px 12px;border-radius:8px;font-size:0.8rem;font-weight:500;margin-bottom:12px;display:none;text-align:center;"></div>
+ <form id="createOfficialForm" onsubmit="submitCreateOfficial(event)" novalidate>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Portal Role *</label>
+ <select id="coRole" onchange="coRoleChanged()" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
+ <option value="barangay">Barangay Official</option>
+ <option value="lgu">LGU Official</option>
+ <option value="first_responder">First Responder</option>
+ </select></div>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Responder Type</label>
+ <select id="coResponderType" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;">
+ <option value="">Select type...</option>
+ <option value="bfp">BFP - Bureau of Fire Protection</option>
+ <option value="pnp">PNP - Philippine National Police</option>
+ <option value="ems">EMS - Emergency Medical Services</option>
+ <option value="drrmo">DRRMO - Disaster Risk Reduction</option>
+ <option value="mdrrmo">MDRRMO - Municipal DRRMO</option>
+ <option value="hospital">Hospital / Medical Facility</option>
+ <option value="other">Other</option>
+ </select></div>
+ </div>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">First Name *</label><input id="coFirst" type="text" placeholder="Juan" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Last Name *</label><input id="coLast" type="text" placeholder="dela Cruz" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ </div>
+ <div style="margin-top:12px;"><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Official Email Address *</label><input id="coEmail" type="email" placeholder="official@example.gov.ph" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Office / Unit Name</label><input id="coOrg" type="text" placeholder="e.g. Brgy. Malagasang I-A Hall" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Position / Rank</label><input id="coPosition" type="text" placeholder="e.g. Barangay Captain" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ </div>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Barangay</label><input id="coBarangay" type="text" placeholder="e.g. Malagasang I-A" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ <div><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">City / Municipality *</label><input id="coMunicipality" type="text" placeholder="e.g. Imus" style="width:100%;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;"></div>
+ </div>
+ <div style="margin-top:12px;"><label style="display:block;font-size:0.75rem;font-weight:600;color:#374151;margin-bottom:4px;">Initial Password</label>
+ <div style="display:flex;gap:8px;align-items:center;">
+ <input id="coPassword" type="text" placeholder="Leave blank to auto-generate" style="flex:1;padding:9px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fafafa;outline:none;font-family:monospace;">
+ <label style="display:inline-flex;align-items:center;gap:6px;font-size:0.76rem;color:#374151;font-weight:600;white-space:nowrap;"><input type="checkbox" id="coEmailCreds" checked> Email credentials</label>
+ </div></div>
+ <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
+ <button type="button" onclick="closeCreateOfficialModal()" style="padding:10px 20px;border:1.5px solid var(--border);background:var(--card);border-radius:10px;font-size:0.86rem;cursor:pointer;font-weight:500;color:var(--text);">Cancel</button>
+ <button type="submit" id="createOfficialBtn" style="padding:10px 20px;background:linear-gradient(135deg,#16a34a,#166534);color:#fff;border:none;border-radius:10px;font-size:0.86rem;cursor:pointer;font-weight:700;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-user-plus"></i> Create Account</button>
+ </div>
+ </form>
+ </div>
+ </div>
+
  </div><!-- /content -->
 </div><!-- /main -->
 
@@ -922,6 +1069,66 @@ async function rejectUser(uid, name){
  const data=await res.json();
  if(data.status==='success'){ allUsers=allUsers.filter(u=>u.id!=uid); renderUsers(); }
  else alert(data.message||'Failed.');
+}
+
+// ── CREATE OFFICIAL ACCOUNT ──────────────────────────────────
+function openCreateOfficialModal(){
+ document.getElementById('createOfficialForm').reset();
+ document.getElementById('createOfficialMsg').style.display='none';
+ coRoleChanged();
+ document.getElementById('createOfficialModalOverlay').style.display='flex';
+}
+function closeCreateOfficialModal(){
+ document.getElementById('createOfficialModalOverlay').style.display='none';
+ loadUsers();
+}
+function coRoleChanged(){
+ const role=document.getElementById('coRole').value;
+ document.getElementById('coResponderType').disabled=(role!=='first_responder');
+}
+function coShowMsg(type,text){
+ const el=document.getElementById('createOfficialMsg');
+ el.style.display='block';
+ el.style.background=type==='success'?'#f0fdf4':'#fef2f2';
+ el.style.color=type==='success'?'#14532d':'#991b1b';
+ el.style.border=`1px solid ${type==='success'?'#bbf7d0':'#fecaca'}`;
+ el.textContent=text;
+}
+async function submitCreateOfficial(e){
+ e.preventDefault();
+ const btn=document.getElementById('createOfficialBtn');
+ const role=document.getElementById('coRole').value;
+ const first=document.getElementById('coFirst').value.trim();
+ const last=document.getElementById('coLast').value.trim();
+ const email=document.getElementById('coEmail').value.trim();
+ const municipality=document.getElementById('coMunicipality').value.trim();
+ if(!first||!last||!email||!municipality){coShowMsg('error','First name, last name, email, and municipality are required.');return;}
+ btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Creating...';
+ const fd=new FormData();
+ fd.append('action','admin_create_official');
+ fd.append('role',role);
+ fd.append('first_name',first);
+ fd.append('last_name',last);
+ fd.append('email',email);
+ fd.append('org_name',document.getElementById('coOrg').value.trim());
+ fd.append('position',document.getElementById('coPosition').value.trim());
+ fd.append('barangay_name',document.getElementById('coBarangay').value.trim());
+ fd.append('municipality',municipality);
+ fd.append('responder_type',document.getElementById('coResponderType').value);
+ fd.append('password',document.getElementById('coPassword').value);
+ fd.append('email_creds',document.getElementById('coEmailCreds').checked?'1':'0');
+ try{
+ const res=await fetch('api/reports.php',{method:'POST',body:fd});
+ const data=await res.json();
+ if(data.status==='success'){
+ coShowMsg('success',data.message);
+ if(data.password){coShowMsg('success',data.message+' Initial password: '+data.password+' (also visible in the welcome email if sending was enabled).');}
+ document.getElementById('createOfficialForm').reset();
+ coRoleChanged();
+ loadUsers();
+ }else{coShowMsg('error',data.message||'Failed to create account.');}
+ }catch{coShowMsg('error','Connection error. Please try again.');}
+ btn.disabled=false;btn.innerHTML='<i class="fas fa-user-plus"></i> Create Account';
 }
 async function deleteUser(uid, name){
  if(!confirm(`Remove user "${name}"?\n\nThis will delete their account and all their reports. This cannot be undone.`)) return;

@@ -30,6 +30,7 @@ CREATE TABLE `users` (
  `token_expires_at` DATETIME DEFAULT NULL,
  `reset_token` VARCHAR(64) DEFAULT NULL,
  `reset_token_expires` DATETIME DEFAULT NULL,
+ `force_password_reset` TINYINT(1) NOT NULL DEFAULT 0,
  `avatar_color` VARCHAR(7) NOT NULL DEFAULT '#1c57b2',
  `gps_lat` DECIMAL(10,7) DEFAULT NULL,
  `gps_lng` DECIMAL(10,7) DEFAULT NULL,

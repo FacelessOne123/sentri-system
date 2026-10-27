@@ -2,6 +2,7 @@
 session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
 if (isset($_SESSION['user_id'])) { require_once __DIR__ . '/config/auth.php'; redirect_to_portal(); }
 require __DIR__ . '/config/db.php';
+require_once __DIR__ . '/config/auth.php';
 
 $token = trim($_GET['token'] ?? '');
 $tokenOk = false;
@@ -41,9 +42,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
  $hash = password_hash($pw, PASSWORD_BCRYPT, ['cost' => 12]);
 
- // Update password + clear reset token + ensure verified
+ // Update password + clear reset token + clear force flag + ensure verified
  $upd = $conn->prepare(
- "UPDATE users SET password=?, reset_token=NULL, reset_token_expires=NULL, email_verified=1
+ "UPDATE users SET password=?, reset_token=NULL, reset_token_expires=NULL, force_password_reset=0, email_verified=1
  WHERE id=?"
  );
  $upd->bind_param("si", $hash, $tokenUser['id']);
@@ -52,7 +53,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  echo json_encode([
  'status' => 'success',
  'message' => 'Password reset successfully! Redirecting to sign in...',
- 'redirect' => 'login.php?reset=success',
+ // Officials are sent back to their own portal's sign-in (gov/login.php), community to login.php.
+ 'redirect' => login_url_for_role($tokenUser['role']).'?reset=success',
  ]);
  exit;
 }
@@ -142,7 +144,8 @@ p.sub{font-size:0.9rem;color:var(--muted);line-height:1.7;margin-bottom:24px;}
  <i class="fas fa-paper-plane"></i> Request New Reset Link
  </a>
  <?php endif; ?>
- <a href="login.php" class="btn-ghost-link"><i class="fas fa-arrow-left"></i> Back to Sign In</a>
+ <a href="login.php" class="btn-ghost-link"><i class="fas fa-arrow-left"></i> Back to Community Sign In</a>
+ <a href="gov/login.php" class="btn-ghost-link"><i class="fas fa-landmark"></i> Government Portal Sign In</a>
 </div>
 
 <script>

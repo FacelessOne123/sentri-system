@@ -5,6 +5,8 @@
  * PHP-layer headers make the vulnerability scanner's headers_list() check
  * accurate regardless of whether mod_headers processed the .htaccess rules.
  */
+require_once __DIR__ . '/mb_compat.php';
+
 if (!headers_sent()) {
  // Prevent clickjacking
  header('X-Frame-Options: SAMEORIGIN');
