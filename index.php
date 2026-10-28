@@ -140,7 +140,7 @@ footer{background:var(--navy-dark);color:rgba(255,255,255,0.45);padding:28px 40p
 <section class="hero">
  <div class="hero-inner">
  <div class="hero-eyebrow"><span class="dot"></span> Official Government Safety Platform</div>
- <h1>Protecting Communities<br>Across the <span>Philippines</span></h1>
+ <h1>Protecting Communities<br>Across <span>Cavite</span></h1>
  <p>SenTri connects citizens, barangay officials, LGU offices, and first responders in a unified incident reporting and response system.</p>
  <div class="hero-ctas">
  <a href="signup.php" class="cta-primary"><i class="fas fa-user-plus"></i> Register Now</a>
