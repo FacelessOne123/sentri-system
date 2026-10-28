@@ -485,6 +485,12 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
 .opt-panel{flex-direction:column;gap:10px;}
 .form-section input[type=text],.form-section textarea{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;font-family:'Poppins',sans-serif;resize:vertical;background:var(--input-bg);color:var(--text);transition:.2s;box-sizing:border-box;}
 .form-section input[type=text]:focus,.form-section textarea:focus{border-color:var(--blue-accent);background:var(--input-focus);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
+/* ── Incident sub-type dropdown ── */
+.incident-fields{margin-top:14px;animation:fadeIn .25s ease;}
+.incident-fields label{display:block;font-size:.79rem;font-weight:700;color:var(--muted);margin-bottom:6px;}
+.incident-fields select{width:100%;padding:11px 14px;border:1.5px solid var(--input-border);border-radius:9px;font-size:.9rem;outline:none;font-family:'Poppins',sans-serif;background:var(--input-bg);color:var(--text);transition:.2s;}
+.incident-fields select:focus{border-color:var(--blue-accent);box-shadow:0 0 0 3px rgba(58,141,255,.1);}
+
 </style>
 </head>
 <body>
@@ -512,7 +518,7 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
  <div class="stat-label-s">Community Overview</div>
  <div class="stat-box"><div class="num"><?= $total_reports ?></div><div class="lbl">Active Reports</div></div>
  <div class="stat-box danger-box"><div class="num"><?= $danger_count ?></div><div class="lbl">Dangerous Areas</div></div>
- <div class="stat-box safe-box"><div class="num"><?= $safe_count ?></div><div class="lbl">Safe Areas</div></div>
+ <div class="stat-box caution-box"><div class="num"><?= $safe_count ?></div><div class="lbl">Caution Areas</div></div>
  </div>
  <div class="sidebar-footer">
  <div class="dm-row" onclick="toggleDark()">
@@ -585,7 +591,7 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
  </div>
  <div class="filters">
  <input type="text" id="searchInput" placeholder="Search location, keyword...">
- <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option><option value="safe">🟢 Safe</option></select>
+ <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
  <select id="categoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
  <button onclick="resetFilters()"><i class="fas fa-rotate"></i> Reset</button>
  <div class="view-toggle">
@@ -611,7 +617,7 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
  </div>
  <div class="filters">
  <input type="text" id="searchInput" placeholder="Search my reports...">
- <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option><option value="safe">🟢 Safe</option></select>
+ <select id="statusFilter"><option value="">All Statuses</option><option value="dangerous">🔴 Dangerous</option><option value="caution">🟠 Caution</option></select>
  <select id="categoryFilter"><option value="">All Categories</option><option value="crime">Crime</option><option value="accident">Accident</option><option value="flooding">Flooding</option><option value="fire">Fire</option><option value="health">Health</option><option value="infrastructure">Infrastructure</option><option value="other">Other</option></select>
  <button onclick="resetFilters()"><i class="fas fa-rotate"></i> Reset</button>
  </div>
@@ -623,7 +629,6 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
  <div class="map-legend">
  <div class="legend-item"><div class="legend-dot dangerous"></div>Dangerous</div>
  <div class="legend-item"><div class="legend-dot caution"></div>Caution</div>
- <div class="legend-item"><div class="legend-dot safe"></div>Safe</div>
  <span class="map-count" id="mapCount"></span>
  </div>
  </div>
@@ -727,20 +732,12 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
  <div id="modalMsg" class="modal-msg"></div>
  <form id="reportForm" novalidate>
 
- <!-- 1 · Severity -->
- <div class="form-section">
- <div class="qs-label"><span class="qs-num">1</span>How serious is it?</div>
- <div class="severity-row">
- <div class="sev-btn dangerous" onclick="selectStatus('dangerous')" id="opt_dangerous"><i class="fas fa-circle-exclamation"></i><span>Dangerous</span></div>
- <div class="sev-btn caution" onclick="selectStatus('caution')" id="opt_caution"><i class="fas fa-triangle-exclamation"></i><span>Caution</span></div>
- <div class="sev-btn safe" onclick="selectStatus('safe')" id="opt_safe"><i class="fas fa-circle-check"></i><span>Safe</span></div>
- </div>
  <input type="hidden" id="r_status">
- </div>
+ 
 
  <!-- 2 · Category -->
  <div class="form-section">
- <div class="qs-label"><span class="qs-num">2</span>What type of incident?</div>
+ <div class="qs-label"><span class="qs-num">1</span>What type of incident?</div>
  <div class="cat-grid">
  <div class="cat-opt" onclick="selectCategory('crime')" id="cat_crime"><i class="fas fa-user-shield"></i><span>Crime</span></div>
  <div class="cat-opt" onclick="selectCategory('accident')" id="cat_accident"><i class="fas fa-car-burst"></i><span>Accident</span></div>
@@ -753,15 +750,98 @@ body.dark .locate-btn-big{background:#1f3a5f;color:var(--blue-accent);}
  <input type="hidden" id="r_category">
  </div>
 
+ <!-- Crime Dropdown -->
+<div id="crime_fields" class="incident-fields" style="display: none;">
+    <label for="crime_type">Select Crime Type</label>
+    <select name="crime_type" id="crime_type">
+        <option value="theft">Theft</option>
+        <option value="robbery">Robbery</option>
+        <option value="murder">Murder</option>
+        <option value="assault">Assault</option>
+        <option value="sexual_harassment">Sexual Harassment</option>
+        <option value="other">Other</option>
+    </select>
+</div>
+
+<!-- Accident Dropdown -->
+<div id="accident_fields" class="incident-fields" style="display: none;">
+    <label for="accident_type">Select Accident Type: </label>
+    <select name="accident_type" id="accident_type">
+        <option value="vehicle_collision">Vehicle Collision</option>
+        <option value="motorcycle_accident">Motorcycle Accident</option>
+        <option value="hit_and_run">Hit and Run</option>
+        <option value="other">Other</option>
+    </select>
+</div>
+
+<!-- Flooding Dropdown -->
+<div id="flooding_fields" class="incident-fields" style="display: none;">
+    <label for="flooding_type">Select Flooding Type</label>
+    <select name="flooding_type" id="flooding_type">
+        <option value="street_flooding">Street Flooding</option>
+        <option value="residential_flooding">Residential Flooding</option>
+        <option value="flash_flood">Flash Flood</option>
+        <option value="river_overflow">River Overflow</option>
+        <option value="other">Other</option>
+    </select>
+</div>
+
+<!-- Fire Dropdown -->
+<div id="fire_fields" class="incident-fields" style="display: none;">
+    <label for="fire_type">Select Fire Type</label>
+    <select name="fire_type" id="fire_type">
+        <option value="residential_fire">Residential Fire</option>
+        <option value="commercial_fire">Commercial Fire</option>
+        <option value="vehicle_fire">Vehicle Fire</option>
+        <option value="electrical_fire">Electrical Fire</option>
+        <option value="other">Other</option>
+    </select>
+</div>
+
+<!-- Health Dropdown -->
+<div id="health_fields" class="incident-fields" style="display: none;">
+    <label for="health_type">Select Health Emergency</label>
+    <select name="health_type" id="health_type">
+        <option value="medical_emergency">Medical Emergency</option>
+        <option value="injury">Injury</option>
+        <option value="unconscious_person">Unconscious Person</option>
+        <option value="breathing_difficulty">Breathing Difficulty</option>
+        <option value="mental_health_crisis">Mental Health Crisis</option>
+        <option value="other">Other</option>
+    </select>
+</div>
+
+<!-- Road / Infrastructure Dropdown -->
+<div id="infrastructure_fields" class="incident-fields" style="display: none;">
+    <label for="infrastructure_type">Select Road Incident</label>
+    <select name="infrastructure_type" id="infrastructure_type">
+        <option value="road_damage">Road Damage</option>
+        <option value="pothole">Pothole</option>
+        <option value="fallen_tree">Fallen Tree</option>
+        <option value="obstructed_road">Obstructed Road</option>
+        <option value="other">Other</option>
+    </select>
+</div>
+
+<!-- Other Dropdown -->
+<div id="other_fields" class="incident-fields" style="display: none;">
+    <label for="other_type">Select Incident Type</label>
+    <select name="other_type" id="other_type">
+        <option value="noise_complaint">Noise Complaint</option>
+        <option value="missing_person">Missing Person</option>
+        <option value="suspicious_activity">Suspicious Activity</option>
+        <option value="public_disturbance">Public Disturbance</option>
+    </select>
+</div>
+
+
+<div id="autoSeverity" style="display:none;align-items:center;gap:8px;margin-top:10px;font-size:.79rem;font-weight:600;color:var(--muted);">Severity (auto): <span class="badge" id="autoSeverityBadge"></span></div>
  <!-- 3 · Description -->
- <div class="form-section">
- <div class="qs-label"><span class="qs-num">3</span>What's happening?</div>
- <textarea id="r_description" placeholder="Briefly describe the situation…" rows="3" maxlength="2000"></textarea>
- </div>
+ 
 
  <!-- 4 · Where -->
  <div class="form-section">
- <div class="qs-label"><span class="qs-num">4</span>Where?</div>
+ <div class="qs-label"><span class="qs-num">2</span>Where is the location?</div>
  <div class="loc-auto-row">
  <button type="button" class="locate-btn-big" id="locateBtn" onclick="useMyLocation()"><i class="fas fa-location-crosshairs"></i> Use My Location</button>
  <span class="pin-status" id="pinStatus"><i class="fas fa-circle-info"></i> No pin set</span>
@@ -1095,10 +1175,45 @@ function closeModal(){
  const oc=document.getElementById('optChevron');if(oc)oc.style.transform='';
  const pb=document.getElementById('mapPickBtn');if(pb)pb.innerHTML='<i class="fas fa-map-pin"></i> Drop a Pin on Map';
 }
+/* Severity is auto-set from the chosen sub-type. Edit this table to change any of them. */
+const SEVERITY_MAP = {
+ crime:{theft:'caution',robbery:'caution',murder:'dangerous',assault:'dangerous',sexual_harassment:'dangerous',other:'caution'},
+ accident:{vehicle_collision:'dangerous',motorcycle_accident:'dangerous',hit_and_run:'dangerous',other:'caution'},
+ flooding:{street_flooding:'caution',residential_flooding:'dangerous',flash_flood:'dangerous',river_overflow:'dangerous',other:'caution'},
+ fire:{residential_fire:'dangerous',commercial_fire:'dangerous',vehicle_fire:'dangerous',electrical_fire:'dangerous',other:'caution'},
+ health:{medical_emergency:'dangerous',injury:'caution',unconscious_person:'dangerous',breathing_difficulty:'dangerous',mental_health_crisis:'dangerous',other:'caution'},
+ infrastructure:{road_damage:'caution',pothole:'dangerous',fallen_tree:'caution',obstructed_road:'caution',other:'caution'},
+ other:{noise_complaint:'caution',missing_person:'caution',suspicious_activity:'caution',public_disturbance:'caution'}
+};
+
+function applySeverity(cat){
+ const sel=document.getElementById(cat+'_type');
+ const sev=(SEVERITY_MAP[cat]||{})[sel?sel.value:'']||'caution';
+ document.getElementById('r_status').value=sev;
+ const wrap=document.getElementById('autoSeverity'),badge=document.getElementById('autoSeverityBadge');
+ if(wrap&&badge){badge.className='badge '+sev;badge.textContent=ucFirst(sev);wrap.style.display='flex';}
+}
+
+function clearStatusSelection(){
+ document.getElementById('r_status').value='';
+ const wrap=document.getElementById('autoSeverity');if(wrap)wrap.style.display='none';
+}
 function outsideClose(e){if(e.target===document.getElementById('modalOverlay'))closeModal();}
-function selectStatus(s){clearStatusSelection();document.getElementById('opt_'+s).classList.add('selected');document.getElementById('r_status').value=s;}
-function clearStatusSelection(){['dangerous','caution','safe'].forEach(s=>document.getElementById('opt_'+s).classList.remove('selected'));document.getElementById('r_status').value='';}
-function selectCategory(c){document.querySelectorAll('.cat-opt').forEach(el=>el.classList.remove('selected'));document.getElementById('cat_'+c).classList.add('selected');document.getElementById('r_category').value=c;}
+function selectCategory(c){
+ document.querySelectorAll('.cat-opt').forEach(el=>el.classList.remove('selected'));
+ document.getElementById('cat_'+c).classList.add('selected');
+ document.getElementById('r_category').value=c;
+ document.querySelectorAll('.incident-fields').forEach(el=>el.style.display='none');
+ const fields=document.getElementById(c+'_fields');
+ if(fields)fields.style.display='block';
+ applySeverity(c);
+}
+
+// Re-calculate severity whenever a sub-type dropdown changes
+document.querySelectorAll('.incident-fields select').forEach(sel=>{
+ sel.addEventListener('change',()=>applySeverity(document.getElementById('r_category').value));
+});
+
 let _locOpen=false,_optOpen=false,_mapOpen=false;
 function toggleLocDetails(){_locOpen=!_locOpen;const ld=document.getElementById('locDetails');ld.style.display=_locOpen?'flex':'none';document.getElementById('locChevron').style.transform=_locOpen?'rotate(90deg)':'rotate(0deg)';if(_locOpen&&pickerMap)setTimeout(()=>pickerMap.invalidateSize(),100);}
 function toggleMapPicker(){_mapOpen=!_mapOpen;const mp=document.getElementById('mapPickerSection');mp.style.display=_mapOpen?'block':'none';const btn=document.getElementById('mapPickBtn');btn.innerHTML=_mapOpen?'<i class="fas fa-xmark"></i> Hide Map':'<i class="fas fa-map-pin"></i> Drop a Pin on Map';if(_mapOpen){setTimeout(()=>{initPickerMap();if(pickerMap)pickerMap.invalidateSize();},100);}}
@@ -1108,23 +1223,29 @@ function removePhoto(idx){const input=document.getElementById('r_photos');const 
 document.getElementById('reportForm').addEventListener('submit',async function(e){
  e.preventDefault();
  const msgEl=document.getElementById('modalMsg'),btn=document.getElementById('submitBtn');
- const status=document.getElementById('r_status').value;
+ const status=document.getElementById('r_status').value||'caution';
  const cat=document.getElementById('r_category').value;
- const desc=document.getElementById('r_description').value.trim();
  const city=document.getElementById('r_city').value.trim();
- if(!status){showMsg(msgEl,'error','Choose a severity level - Step 1.');return;}
- if(!cat){showMsg(msgEl,'error','Choose an incident type - Step 2.');return;}
- if(!desc){showMsg(msgEl,'error','Describe what is happening - Step 3.');return;}
- if(!city){showMsg(msgEl,'error','Enter your city or municipality - Step 4.');return;}
- // Auto-generate title
+ 
+ // Sub-type from the dropdown (e.g. crime -> murder)
+ const typeSel=document.getElementById(cat+'_type');
+ const incType=typeSel?typeSel.value:'';
+ const incLabel=typeSel?typeSel.options[typeSel.selectedIndex].text:(CL[cat]||'Incident');
+
+ // Title and description are optional - auto-filled when blank
  let title=document.getElementById('r_title').value.trim();
- if(!title)title=`${ucFirst(status)} ${CL[cat]||'Incident'} in ${city}`;
- // Auto-fill location_name
+ if(!title)title=`${ucFirst(status)} ${incLabel} in ${city}`;
+ const descEl=document.getElementById('r_description');
+ let desc=descEl?descEl.value.trim():'';
+ if(!desc)desc=`${incLabel} (${CL[cat]||cat}) reported in ${city}.`;
+
  let loc=document.getElementById('r_location').value.trim();
  if(!loc){const la=document.getElementById('r_latitude').value,ln=document.getElementById('r_longitude').value;loc=la&&ln?`Near ${parseFloat(la).toFixed(5)}, ${parseFloat(ln).toFixed(5)}`:city;}
+
  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Submitting…';
  const fd=new FormData();
  fd.append('action','post_report');fd.append('title',title);fd.append('status',status);fd.append('category',cat);
+ fd.append('incident_type',incType);
  fd.append('location_name',loc);fd.append('barangay',document.getElementById('r_barangay').value.trim());
  fd.append('city',city);fd.append('province',document.getElementById('r_province').value.trim());
  fd.append('description',desc);fd.append('latitude',document.getElementById('r_latitude').value);
@@ -1132,13 +1253,13 @@ document.getElementById('reportForm').addEventListener('submit',async function(e
  const ph=document.getElementById('r_photos');
  if(ph&&ph.files.length)Array.from(ph.files).slice(0,3).forEach(f=>fd.append('photos[]',f));
  try{
- const res=await fetch('../api/reports.php',{method:'POST',body:fd});
- const data=await res.json();
- if(data.status==='success'){
- showMsg(msgEl,'success','Report posted!');
- if(status==='dangerous'&&data.id){const nfd=new FormData();nfd.append('action','notify_report');nfd.append('report_id',data.id);fetch('../api/contacts.php',{method:'POST',body:nfd}).catch(()=>{});}
- setTimeout(()=>{closeModal();fetchReports();},1000);
- }else showMsg(msgEl,'error',data.message||'Failed to submit.');
+  const res=await fetch('../api/reports.php',{method:'POST',body:fd});
+  const data=await res.json();
+  if(data.status==='success'){
+   showMsg(msgEl,'success','Report posted!');
+   if(status==='dangerous'&&data.id){const nfd=new FormData();nfd.append('action','notify_report');nfd.append('report_id',data.id);fetch('../api/contacts.php',{method:'POST',body:nfd}).catch(()=>{});}
+   setTimeout(()=>{closeModal();fetchReports();},1000);
+  }else showMsg(msgEl,'error',data.message||'Failed to submit.');
  }catch{showMsg(msgEl,'error','Network error.');}
  btn.disabled=false;btn.innerHTML='<i class="fas fa-paper-plane"></i> Submit Report';
 });

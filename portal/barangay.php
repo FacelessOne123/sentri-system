@@ -34,15 +34,16 @@ function cq($conn,$sql,$types='',$params=[]){
 // reverse geocoding), so "Brgy. San Jose", "san jose" and "Barangay San Jose" must all match.
 // Reports with no barangay fall back to the reporter's profile barangay.
 function brgy_norm($v){
- $v=strtolower(trim((string)$v));
- $v=str_replace(['barangay','brgy'],'',$v);
- return preg_replace('/[^a-z0-9]/','',$v);
+ $v = mb_strtolower(trim((string)$v), 'UTF-8');
+ $v = strtr($v, ['ñ'=>'n','á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
+ $v = str_replace(['barangay','brgy'], '', $v);
+ return preg_replace('/[^a-z0-9]/', '', $v);
 }
 function brgy_sql($col){
- return "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE($col,''))),'barangay',''),'brgy',''),'.',''),',',''),'-',''),'_',''),' ','')";
+ return "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE($col,''))),'ñ','n'),'barangay',''),'brgy',''),'.',''),',',''),'-',''),'_',''),' ','')";
 }
 $brgy_key = brgy_norm($brgy);
-$BRGY_COND = "(".brgy_sql('r.barangay')."=? OR (COALESCE(TRIM(r.barangay),'')='' AND ".brgy_sql('u.barangay_name')."=?))";
+$BRGY_COND = "(".brgy_sql('r.barangay')."=? OR ".brgy_sql('u.barangay_name')."=?)";
 
 // Stats - scoped to this barangay official's assigned barangay (falls back to community-wide if none set)
 if ($brgy) {
