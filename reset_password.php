@@ -1,8 +1,26 @@
 <?php
+ob_start();
 session_start(['cookie_httponly'=>true,'cookie_samesite'=>'Lax','cookie_secure'=>!empty($_SERVER['HTTPS'])]);
-if (isset($_SESSION['user_id'])) { require_once __DIR__ . '/config/auth.php'; redirect_to_portal(); }
+ini_set('display_errors', 0);
+error_reporting(E_ALL);
+
 require __DIR__ . '/config/db.php';
 require_once __DIR__ . '/config/auth.php';
+
+$isPost = ($_SERVER['REQUEST_METHOD'] === 'POST');
+
+// Only redirect logged-in users on normal page loads, never on the AJAX POST
+if (!$isPost && isset($_SESSION['user_id'])) {
+    redirect_to_portal();
+    exit;
+}
+
+function json_out(array $data): void {
+    ob_clean();
+    header('Content-Type: application/json');
+    echo json_encode($data);
+    exit;
+}
 
 $token = trim($_GET['token'] ?? '');
 $tokenOk = false;
@@ -10,53 +28,51 @@ $tokenUser = null;
 
 // Validate token on every GET/POST
 if (!empty($token) && preg_match('/^[a-f0-9]{64}$/', $token)) {
- $stmt = $conn->prepare(
- "SELECT id, first_name, reset_token_expires FROM users
- WHERE reset_token = ? AND reset_token_expires > NOW() LIMIT 1"
- );
- $stmt->bind_param("s", $token);
- $stmt->execute();
- $res = $stmt->get_result();
- $tokenUser = $res->fetch_assoc();
- $stmt->close();
- if ($tokenUser) $tokenOk = true;
+    $stmt = $conn->prepare(
+        "SELECT id, first_name, role, reset_token_expires FROM users
+         WHERE reset_token = ? AND reset_token_expires > NOW() LIMIT 1"
+    );
+    $stmt->bind_param("s", $token);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    $tokenUser = $res->fetch_assoc();
+    $stmt->close();
+    if ($tokenUser) $tokenOk = true;
 }
 
 // Handle POST - set new password
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
- header('Content-Type: application/json');
+if ($isPost) {
+    if (!$tokenOk) {
+        json_out(['status'=>'error','message'=>'This reset link is invalid or has expired. Please request a new one.']);
+    }
 
- if (!$tokenOk) {
- echo json_encode(['status'=>'error','message'=>'This reset link is invalid or has expired. Please request a new one.']); exit;
- }
+    $pw  = $_POST['password'] ?? '';
+    $pw2 = $_POST['confirm_password'] ?? '';
 
- $pw = $_POST['password'] ?? '';
- $pw2 = $_POST['confirm_password'] ?? '';
+    if (strlen($pw) < 8) {
+        json_out(['status'=>'error','message'=>'Password must be at least 8 characters.']);
+    }
+    if ($pw !== $pw2) {
+        json_out(['status'=>'error','message'=>'Passwords do not match.']);
+    }
 
- if (strlen($pw) < 8) {
- echo json_encode(['status'=>'error','message'=>'Password must be at least 8 characters.']); exit;
- }
- if ($pw !== $pw2) {
- echo json_encode(['status'=>'error','message'=>'Passwords do not match.']); exit;
- }
+    $hash = password_hash($pw, PASSWORD_BCRYPT, ['cost' => 12]);
 
- $hash = password_hash($pw, PASSWORD_BCRYPT, ['cost' => 12]);
+    // Update password + clear reset token + clear force flag + ensure verified
+    $upd = $conn->prepare(
+        "UPDATE users SET password=?, reset_token=NULL, reset_token_expires=NULL, force_password_reset=0, email_verified=1
+         WHERE id=?"
+    );
+    $upd->bind_param("si", $hash, $tokenUser['id']);
+    $upd->execute();
+    $upd->close();
 
- // Update password + clear reset token + clear force flag + ensure verified
- $upd = $conn->prepare(
- "UPDATE users SET password=?, reset_token=NULL, reset_token_expires=NULL, force_password_reset=0, email_verified=1
- WHERE id=?"
- );
- $upd->bind_param("si", $hash, $tokenUser['id']);
- $upd->execute(); $upd->close();
-
- echo json_encode([
- 'status' => 'success',
- 'message' => 'Password reset successfully! Redirecting to sign in...',
- // Officials are sent back to their own portal's sign-in (gov/login.php), community to login.php.
- 'redirect' => login_url_for_role($tokenUser['role']).'?reset=success',
- ]);
- exit;
+    json_out([
+        'status'   => 'success',
+        'message'  => 'Password reset successfully! Redirecting to sign in...',
+        // Officials go back to gov/login.php, community to login.php.
+        'redirect' => login_url_for_role($tokenUser['role']) . '?reset=success',
+    ]);
 }
 ?>
 <!DOCTYPE html>
@@ -181,9 +197,13 @@ if(form){
  msgEl.className='msg error';msgEl.textContent=data.message;msgEl.style.display='block';
  btn.disabled=false;btn.innerHTML=orig;
  }
- }catch{
- msgEl.className='msg error';msgEl.textContent='Something went wrong.';msgEl.style.display='block';
- btn.disabled=false;btn.innerHTML=orig;
+ }catch(err){
+ console.error(err);
+ msgEl.className='msg error';
+ msgEl.textContent='Something went wrong. Please try again.';
+ msgEl.style.display='block';
+ btn.disabled=false;
+ btn.innerHTML=orig;
  }
  });
 }
